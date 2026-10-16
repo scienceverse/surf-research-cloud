@@ -1,0 +1,24 @@
+# Managed by the metacheck SURF Research Cloud component.
+# Read by R processes of the shiny user (the metacheck report app).
+
+# Local bibr extraction API and its bearer token.
+BIBR_API_URL=http://127.0.0.1:{{ metacheck_bibr_port }}
+BIBR_API_KEY={{ metacheck_bibr_api_key }}
+
+# Language model for metacheck's LLM modules (ellmer).
+{% if metacheck_llm_provider == 'ollama' %}
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+{% endif %}
+
+# Keys for the optional cloud providers.
+{% if metacheck_google_api_key != 'none' %}
+GOOGLE_API_KEY={{ metacheck_google_api_key }}
+GEMINI_API_KEY={{ metacheck_google_api_key }}
+{% endif %}
+{% if metacheck_anthropic_api_key != 'none' %}
+ANTHROPIC_API_KEY={{ metacheck_anthropic_api_key }}
+{% endif %}
+{% if metacheck_openai_api_key != 'none' %}
+OPENAI_API_KEY={{ metacheck_openai_api_key }}
+{% endif %}

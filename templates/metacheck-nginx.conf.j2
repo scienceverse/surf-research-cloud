@@ -1,0 +1,56 @@
+# Managed by the metacheck SURF Research Cloud component.
+# Included from the SRC-Nginx server block (/etc/nginx/conf.d/tls_main.conf),
+# which already terminates TLS and defines /validate and @custom_401 for the
+# SRAM login. Every location below requires that login.
+
+# The workspace root goes straight to the metacheck report app.
+location = / {
+    return 302 /metacheck/;
+}
+
+# metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
+location /metacheck/ {
+    error_page 401 = @custom_401;
+    auth_request /validate;
+    auth_request_set $username $upstream_http_username;
+
+    proxy_pass http://127.0.0.1:{{ metacheck_shiny_port }}/metacheck/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-SRC-Auth-Username $username;
+    # Shiny keeps a websocket open for the whole session.
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+    client_max_body_size {{ metacheck_max_upload }};
+}
+
+# bibr extraction API (bibr serve on port {{ metacheck_bibr_port }}).
+# Besides the SRAM login, bibr itself requires its bearer token
+# (see /etc/metacheck/bibr_api_key on the workspace).
+location /bibr/ {
+    error_page 401 = @custom_401;
+    auth_request /validate;
+
+    proxy_pass http://127.0.0.1:{{ metacheck_bibr_port }}/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 900s;
+    proxy_request_buffering off;
+    client_max_body_size {{ metacheck_max_upload }};
+}
+
+# Installation progress (plain text), useful while the bibr images build.
+location = /metacheck-status {
+    error_page 401 = @custom_401;
+    auth_request /validate;
+    alias /var/log/metacheck/status.txt;
+    default_type text/plain;
+}
