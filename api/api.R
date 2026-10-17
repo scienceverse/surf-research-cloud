@@ -4,13 +4,15 @@
 # Send a PDF (or bibr JSON) and get a metacheck report back, from any language.
 #
 # With a job (for websites and long papers):
-#   POST /jobs                 file + kind (report | check | convert) -> job id
+#   POST /jobs                 file + kind (report | check | convert | repocheck) -> job id
 #   GET  /jobs/{id}            status: queued | running | done | failed, step, position
 #   GET  /jobs/{id}/result     the result once done
 # In one call (waits for the result; same queue):
 #   POST /report               PDF or bibr JSON -> HTML report
 #   POST /check                PDF or bibr JSON -> module results as JSON
 #   POST /convert              PDF              -> bibr JSON
+#   POST /repocheck            .zip of a data/code folder -> HTML report of
+#                              repo_check, code_check and data_check
 # Other:
 #   GET  /modules, GET /health; documentation at /__docs__/ (under /api/).
 #
@@ -36,7 +38,9 @@ MAX_WORKERS <- as.integer(Sys.getenv("METACHECK_API_WORKERS", "2"))
 MAX_WAITING <- 20L                  # queued jobs; more are refused (HTTP 503)
 RESULT_KEEP_MINUTES <- as.numeric(Sys.getenv("METACHECK_API_KEEP_MINUTES", "60"))
 JOB_TIMEOUT_MINUTES <- 30
-MAX_UPLOAD_BYTES <- 50 * 1024 * 1024
+MAX_UPLOAD_BYTES <- 50 * 1024^2     # PDF or bibr JSON
+MAX_ZIP_BYTES <- 500 * 1024^2       # .zip of a data/code folder (as metacheck's repocheck app)
+MIN_FREE_DISK_MB <- 10000           # refuse new jobs when less is free (as the repocheck app)
 
 # The modules the paper report app offers (app/app.R, VALIDATED_MODULES).
 ALLOWED_MODULES <- c(
@@ -160,16 +164,19 @@ later::later(.scheduler, 1)
 
 # ---- submitting --------------------------------------------------------------
 
-# Reads the multipart upload with webutils (plumber's own parser), not
-# mime::parse_multipart() as metacheck's API helpers do: mime only finds a part
-# when its Content-Disposition header comes first, and .NET (so PowerShell)
-# sends Content-Type first, which is equally valid (metacheck #498).
+# Reads the multipart upload with webutils (plumber's own parser), as
+# metacheck's API helpers also do since 0.3.3.16 (parse_upload(), metacheck
+# #498: mime missed uploads from .NET and PowerShell). This interface keeps its
+# own reader because it needs the bytes, not a temporary file, to tell a PDF,
+# bibr JSON and a .zip apart and to apply each one's size limit, and because it
+# reports a broken upload instead of treating it as no upload.
 .parse_upload <- function(req) {
   body <- req$bodyRaw
   if (is.null(body) || length(body) == 0) {
     req$rook.input$rewind()
     body <- req$rook.input$read()
   }
+  if (length(body) > MAX_ZIP_BYTES + 1024^2) stop("The file is larger than 500 MB.", call. = FALSE)
   ctype <- req$CONTENT_TYPE
   if (is.null(ctype) || !grepl("^multipart/form-data", ctype)) {
     stop("Send the file as multipart/form-data, in the form field 'file'.", call. = FALSE)
@@ -180,14 +187,31 @@ later::later(.scheduler, 1)
     stop("Send exactly one file in the form field 'file'.", call. = FALSE)
   }
   raw <- f$value
-  if (length(raw) > MAX_UPLOAD_BYTES) stop("The file is larger than 50 MB.", call. = FALSE)
-  kind <- if (length(raw) >= 4 && identical(rawToChar(raw[1:4]), "%PDF")) "pdf"
-          else if (rawToChar(raw[1]) %in% c("{", "[")) "json"
-          else stop("The file is neither a PDF nor bibr JSON.", call. = FALSE)
+  head4 <- if (length(raw) >= 4) raw[1:4] else raw
+  kind <- if (identical(head4, charToRaw("%PDF"))) "pdf"
+          else if (identical(head4, as.raw(c(0x50, 0x4b, 0x03, 0x04))) ||
+                   identical(head4, as.raw(c(0x50, 0x4b, 0x05, 0x06)))) "zip"
+          else if (length(raw) && rawToChar(raw[1]) %in% c("{", "[")) "json"
+          else stop("The file is not a PDF, bibr JSON or a .zip file.", call. = FALSE)
+  if (kind == "zip" && length(raw) > MAX_ZIP_BYTES) {
+    stop("The .zip file is larger than 500 MB. Leave out large data or output files that do not need checking, and try again.", call. = FALSE)
+  }
+  if (kind != "zip" && length(raw) > MAX_UPLOAD_BYTES) stop("The file is larger than 50 MB.", call. = FALSE)
+  # the uploaded file's name without folders and extension (the report's title)
+  name <- tools::file_path_sans_ext(basename(gsub("\\\\", "/", f$filename %||% "")))
+  name <- substr(gsub("[[:cntrl:]]", "", name), 1, 120)
   fields <- lapply(parts[setdiff(names(parts), "file")], function(p) {
     if (is.raw(p$value)) rawToChar(p$value) else as.character(p$value)
   })
-  list(raw = raw, kind = kind, fields = fields)
+  list(raw = raw, kind = kind, name = name, fields = fields)
+}
+
+# Free space (MB) where the jobs are kept; NA if df gives no answer.
+.disk_free_mb <- function(path = JOBS_DIR) {
+  out <- tryCatch(system2("df", c("-Pk", shQuote(path)), stdout = TRUE, stderr = FALSE),
+                  error = function(e) character(0), warning = function(w) character(0))
+  if (length(out) < 2) return(NA_real_)
+  as.numeric(strsplit(trimws(out[length(out)]), "[[:space:]]+")[[1]][4]) / 1024
 }
 
 .parse_modules <- function(param) {
@@ -206,24 +230,32 @@ later::later(.scheduler, 1)
 .submit <- function(req, kind = NULL) {
   up <- .parse_upload(req)
   kind <- kind %||% up$fields$kind %||% "report"
-  if (!kind %in% c("report", "check", "convert")) {
-    stop("kind must be report, check or convert.", call. = FALSE)
+  if (!kind %in% c("report", "check", "convert", "repocheck")) {
+    stop("kind must be report, check, convert or repocheck.", call. = FALSE)
   }
   if (kind == "convert" && up$kind != "pdf") stop("convert needs a PDF.", call. = FALSE)
+  if (kind == "repocheck" && up$kind != "zip") {
+    stop("repocheck needs a .zip file of a data and code folder.", call. = FALSE)
+  }
+  if (kind != "repocheck" && up$kind == "zip") {
+    stop("A .zip file is checked with kind=repocheck (or POST /repocheck).", call. = FALSE)
+  }
   if (up$kind == "pdf" && !nzchar(Sys.getenv("BIBR_API_URL"))) {
     stop("This server has no bibr: send bibr JSON instead of a PDF.", call. = FALSE)
   }
-  modules <- if (kind == "convert") character(0) else .parse_modules(up$fields$modules)
-  if (length(.queued_ids()) >= MAX_WAITING) {
-    e <- simpleError("The queue is full; try again in a few minutes.")
-    class(e) <- c("queue_full", class(e))
-    stop(e)
+  modules <- if (kind %in% c("convert", "repocheck")) character(0) else .parse_modules(up$fields$modules)
+  busy <- function(msg) {
+    e <- simpleError(msg); class(e) <- c("queue_full", class(e)); stop(e)
   }
+  if (length(.queued_ids()) >= MAX_WAITING) busy("The queue is full; try again in a few minutes.")
+  free <- .disk_free_mb()
+  if (!is.na(free) && free < MIN_FREE_DISK_MB) busy("The server is short of disk space; try again later.")
   id <- uuid::UUIDgenerate()
   dir.create(.job_dir(id), mode = "0700")
   input <- paste0("input.", up$kind)
   writeBin(up$raw, file.path(.job_dir(id), input))
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
+                            name = up$name,
                             report = tolower(up$fields$report %||% "false") %in% c("true", "1", "yes")),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
   .write_status(id, list(status = "queued", step = "waiting in the queue", created = .now(),
@@ -233,22 +265,36 @@ later::later(.scheduler, 1)
 
 .status_body <- function(id, req) {
   st <- .read_status(id)
+  # A folder check reports its steps through metacheck's progress code
+  # (shiny_progress.R): "<fraction done>\t<what it is doing>".
+  pf <- file.path(.job_dir(id), "progress.txt")
+  progress <- NULL
+  if (identical(st$status, "running") && file.exists(pf)) {
+    line <- tryCatch(readLines(pf, n = 1, warn = FALSE, encoding = "UTF-8"), error = function(e) "")
+    if (length(line) && grepl("\t", line)) {
+      progress <- round(as.numeric(sub("\t.*", "", line)), 2)
+      detail <- sub("^[^\t]*\t", "", line)
+      if (nzchar(detail)) st$step <- detail
+    }
+  }
   # Full links as the client sees them (nginx passes the scheme and the /api
   # prefix); without nginx, links relative to this service.
   host <- req$HTTP_HOST %||% ""
   base <- if (nzchar(host)) {
     paste0(req$HTTP_X_FORWARDED_PROTO %||% "http", "://", host, req$HTTP_X_FORWARDED_PREFIX %||% "")
   } else ""
-  list(
+  # empty fields are left out (unboxedJSON would show them as {})
+  Filter(Negate(is.null), list(
     id = id,
     status = st$status,
     step = st$step,
     position = if (identical(st$status, "queued")) .position(id) else NULL,
+    progress = progress,
     created = st$created, started = st$started, finished = st$finished,
     error = st$error,
     status_url = paste0(base, "/jobs/", id),
     result_url = paste0(base, "/jobs/", id, "/result")
-  )
+  ))
 }
 
 .result_response <- function(id, res) {
@@ -300,7 +346,7 @@ later::later(.scheduler, 1)
 # ---- endpoints -----------------------------------------------------------------
 
 #* @apiTitle metacheck on SURF Research Cloud
-#* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back. PDFs are converted with bibr on SURF Research Cloud. Uploads are deleted once processed, results one hour after they are finished.
+#* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back, or a .zip of a data and code folder and get a report on it. PDFs are converted with bibr on SURF Research Cloud. Uploads are deleted once processed, results one hour after they are finished.
 
 source(file.path(API_DIR, "bibr_client.R"))
 # bibr's readiness, asked at most every 10 seconds (bibr can be slow to answer
@@ -335,8 +381,8 @@ function() {
 #* @post /jobs
 #* @parser multi
 #* @parser octet
-#* @param file:file The PDF or bibr JSON
-#* @param kind "report" (default), "check" or "convert"
+#* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
+#* @param kind "report" (default), "check", "convert" or "repocheck"
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @serializer unboxedJSON
@@ -390,3 +436,10 @@ function(req, res) .one_call(req, res, "check")
 #* @parser octet
 #* @param file:file The PDF
 function(req, res) .one_call(req, res, "convert")
+
+#* Check a data and code folder (.zip, at most 500 MB) with repo_check, code_check and data_check, in one call; returns the HTML report
+#* @post /repocheck
+#* @parser multi
+#* @parser octet
+#* @param file:file The .zip of the folder
+function(req, res) .one_call(req, res, "repocheck")

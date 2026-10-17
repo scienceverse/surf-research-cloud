@@ -182,9 +182,10 @@
         msg: "No local model: {{ 'metacheck_llm is none' if metacheck_llm != 'ollama' else 'this workspace has no GPU' }}. The app's LLM power check can still use a cloud provider."
       when: not (metacheck_local_llm | bool)
 
-    - name: Find a large disk for model files
+    # For model files, and for the web interface's job folders (uploads of up
+    # to 500 MB, unpacked to up to 1000 MB).
+    - name: Find a large disk for model files and jobs
       ansible.builtin.include_tasks: tasks/large_disk.yml
-      when: metacheck_local_llm | bool
 
     - name: Install Ollama and pull the model
       ansible.builtin.include_tasks: tasks/ollama.yml
@@ -364,19 +365,23 @@
         group: root
         mode: "0755"
 
-    # metacheck's API helper code (inst/plumber/utils) is not part of the
-    # installed package (.Rbuildignore), so it is taken from the same
-    # repository and branch metacheck was installed from.
-    - name: Fetch metacheck's API helper code
+    # metacheck's API helper code (inst/plumber/utils) and its repository
+    # check app (inst/app/shiny_app_repocheck, for folder checks) are not part
+    # of the installed package (.Rbuildignore), so they are taken from the
+    # same repository and branch metacheck was installed from.
+    - name: Fetch metacheck's API helper code and repository check app
       ansible.builtin.shell: |
         set -e
         tmp=$(mktemp -d)
         git clone -q --depth 1 --filter=blob:none --sparse -b {{ metacheck_ref }} https://github.com/{{ metacheck_repo }}.git "$tmp/mc"
-        git -C "$tmp/mc" sparse-checkout set inst/plumber/utils
-        dest={{ metacheck_component_dir }}/api/metacheck-plumber/utils
-        if ! diff -rq "$tmp/mc/inst/plumber/utils" "$dest" >/dev/null 2>&1; then
-          rm -rf "$dest"; cp -r "$tmp/mc/inst/plumber/utils" "$dest"; chmod -R a+rX "$dest"; echo changed
-        fi
+        git -C "$tmp/mc" sparse-checkout set inst/plumber/utils inst/app/shiny_app_repocheck
+        api={{ metacheck_component_dir }}/api
+        for pair in "inst/plumber/utils:metacheck-plumber/utils" "inst/app/shiny_app_repocheck:metacheck-repocheck"; do
+          src="$tmp/mc/${pair%%:*}"; dest="$api/${pair#*:}"
+          if ! diff -rq "$src" "$dest" >/dev/null 2>&1; then
+            rm -rf "$dest"; cp -r "$src" "$dest"; chmod -R a+rX "$dest"; echo "changed $dest"
+          fi
+        done
         rm -rf "$tmp"
       register: api_helpers
       changed_when: "'changed' in api_helpers.stdout"
@@ -394,14 +399,28 @@
         - { src: app/bibr_client.R, dest: bibr_client.R }
       register: api_files
 
-    # Job folders (uploads while queued, results for one hour), shiny only.
+    # Job folders (uploads while queued, results for one hour), shiny only;
+    # on the storage volume when there is one. Recursive, because a reused
+    # volume may hold folders of an earlier workspace's shiny user.
+    - name: Choose the web interface's job folder
+      ansible.builtin.set_fact:
+        metacheck_api_jobs_dir: "{{ (large_disk ~ '/metacheck-api-jobs') if large_disk is match('/data/') else '/var/lib/metacheck-api/jobs' }}"
+
     - name: Create the web interface's job folder
       ansible.builtin.file:
-        path: /var/lib/metacheck-api/jobs
+        path: "{{ metacheck_api_jobs_dir }}"
         state: directory
         owner: shiny
         group: shiny
         mode: "0700"
+
+    - name: Give the shiny user what is already in the job folder
+      ansible.builtin.file:
+        path: "{{ metacheck_api_jobs_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        recurse: true
 
     - name: Install the web interface service
       ansible.builtin.template:

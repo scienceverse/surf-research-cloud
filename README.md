@@ -135,17 +135,19 @@ The progress page always requires the SRAM login.
 
 The metacheck component also runs a small web interface (`api/api.R`, plumber,
 service `metacheck-api`) at `https://<workspace>/api/`. Send a paper, get the
-report back. It follows the same switch as the app: open to anyone while
+report back; or send a .zip of a data and code folder and get a report on that
+folder. It follows the same switch as the app: open to anyone while
 `metacheck-public on`, behind the SRAM login otherwise.
 
 | Request | Send (form field `file`) | Get |
 |---|---|---|
-| `POST /api/jobs` | PDF or bibr JSON; `kind` = `report` (default), `check` or `convert`; optional `modules`, `report=true` | at once (HTTP 202): the job's `id`, `status_url` and `result_url` |
-| `GET /api/jobs/<id>` | | `status` (`queued`, `running`, `done`, `failed`), `step` (such as "running module 3 of 7: stat_check"), `position` in the queue, `error` |
+| `POST /api/jobs` | PDF or bibr JSON; `kind` = `report` (default), `check` or `convert`; optional `modules`, `report=true`. Or a .zip with `kind` = `repocheck` | at once (HTTP 202): the job's `id`, `status_url` and `result_url` |
+| `GET /api/jobs/<id>` | | `status` (`queued`, `running`, `done`, `failed`), `step` (such as "running module 3 of 7: stat_check"), `position` in the queue, for a folder check `progress` (0 to 1), `error`; fields without a value are left out |
 | `GET /api/jobs/<id>/result` | | the result once `done`; HTTP 409 before that, 422 with `error` if the job failed |
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
+| `POST /api/repocheck` | .zip of a data and code folder | the HTML report of `repo_check`, `code_check` and `data_check` |
 | `GET /api/modules` | | the modules that may be requested, and the default set |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
 | `/api/__docs__/` | | interactive documentation in the browser |
@@ -155,7 +157,20 @@ closed). Only the modules the app offers can be requested; the default is a quic
 set that needs no other online service (`power`, `marginal`, `ethics_check`,
 `stat_check`, `stat_p_exact`, `stat_p_nonsig`, `stat_effect_size`).
 
-Every paper becomes a job in one queue, whichever request sent it. At most two jobs
+A folder check (`repocheck`) is the check of metacheck's repository check app
+(`inst/app/shiny_app_repocheck`): the playbook takes that app's code from the same
+metacheck branch, and the interface uses its .zip checks, its three modules and its
+short report with a folded file list, so both give the same report. The report names
+the folder after the .zip (or after the one folder the .zip contains), not after its
+place on the server (metacheck issue #500). A small folder takes about 10 s.
+
+Size limits: PDFs and bibr JSON at most 50 MB; a .zip at most 500 MB, at most
+1000 MB and 20,000 files once unpacked, and without paths that point outside the
+folder (the app's limits). Larger uploads get HTTP 413 with a JSON `error`. A
+480 MB .zip took 43 s to upload from a university network. New jobs are refused
+while less than 10 GB is free where the jobs are kept.
+
+Every paper or folder becomes a job in one queue, whichever request sent it. At most two jobs
 run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
 keeps answering while they run; at most 20 wait, and further uploads get HTTP 503.
 `/jobs` answers at once and suits web pages and long papers; `/report`, `/check` and
@@ -164,7 +179,10 @@ of code. A job is stopped after 30 minutes. A new 16-page paper took about 60 s 
 upload to report, and three new papers sent together were done after 211 s; a paper
 bibr has seen before takes about 10 s.
 
-Uploads are deleted as soon as a job has read them. Results are deleted 60 minutes
+Jobs are kept on the storage volume when there is one
+(`/data/<volume>/metacheck-api-jobs`), otherwise in `/var/lib/metacheck-api/jobs`.
+Uploads are deleted as soon as a job has read them, and a folder's unpacked files
+when its check ends. Results are deleted 60 minutes
 after the job finished (`METACHECK_API_KEEP_MINUTES`); until then anyone with the
 job's id can fetch them, and the id is a random UUID. While public: 6 uploads per
 minute per visitor (burst 6), beyond that HTTP 429 with a JSON `error`; status and
@@ -176,6 +194,7 @@ Examples (all tested; replace the address with your workspace's):
 curl -F file=@paper.pdf https://<workspace>/api/report -o report.html
 curl -F file=@paper.pdf -F modules=power,stat_check https://<workspace>/api/check
 curl -F file=@paper.pdf https://<workspace>/api/convert -o paper.json
+curl -F file=@my_study.zip https://<workspace>/api/repocheck -o folder_report.html
 ```
 
 ```r

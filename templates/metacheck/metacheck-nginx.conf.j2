@@ -68,7 +68,16 @@ location /api/ {
     proxy_read_timeout 1800s;
     proxy_send_timeout 1800s;
     proxy_request_buffering on;
-    client_max_body_size 55M;
+    # PDFs up to 50 MB, .zip files of data and code folders up to 500 MB
+    # (api.R checks each limit)
+    client_max_body_size 505M;
+    error_page 413 = @metacheck_api_413;
+}
+
+# Uploads over the size limit, answered as JSON like the interface's own errors.
+location @metacheck_api_413 {
+    default_type application/json;
+    return 413 '{"error":"The file is too large: PDFs and bibr JSON may be at most 50 MB, .zip files of data and code folders at most 500 MB."}';
 }
 
 {% if metacheck_nginx_public | bool %}
