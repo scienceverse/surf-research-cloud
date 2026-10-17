@@ -73,6 +73,14 @@ The first start of a bibr server builds its Docker images in the background (20
 to 40 minutes; progress at `/bibr-status`). Until bibr answers, the app shows a
 warning when its bibr option is selected.
 
+Note: a parameter value is visible in plain text in the workspace's "Logs" tab
+in the SRC portal when a component fails (SRC's own hiding of values missed the
+token). Anyone in the collaboration who can read workspace logs can then see
+bibr's token.
+
+A storage volume can be reused by a later workspace: Docker images and model
+files on it are reused, and their ownership is corrected for the new workspace.
+
 ## Component definitions (SRC portal, Development → Components → +)
 
 | Field | bibr | metacheck |

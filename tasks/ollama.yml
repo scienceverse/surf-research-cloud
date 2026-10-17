@@ -23,7 +23,11 @@
 - name: Set Ollama's address
   ansible.builtin.set_fact:
     ollama_url: "http://{{ ollama_host }}:11434"
-    ollama_models_dir: "{{ (large_disk ~ '/ollama-models') if large_disk | length > 0 else '/usr/share/ollama/.ollama/models' }}"
+    # On an SRC storage volume (/data/...) when there is one. Never on the
+    # temporary /mnt/scratch disk: it is wiped on every restart, and nothing
+    # downloads the model again afterwards. Otherwise Ollama's default folder
+    # on the boot disk.
+    ollama_models_dir: "{{ (large_disk ~ '/ollama-models') if large_disk is match('/data/') else '/usr/share/ollama/.ollama/models' }}"
 
 - name: Install Ollama
   ansible.builtin.shell: curl -fsSL https://ollama.com/install.sh | sh
@@ -38,6 +42,17 @@
     owner: ollama
     group: ollama
     mode: "0755"
+
+# A storage volume can come from an earlier workspace, whose ollama user had
+# a different user number: its model files are then not writable for this
+# workspace's Ollama ("permission denied" when pulling the model).
+- name: Give everything in the model directory to this workspace's Ollama
+  ansible.builtin.file:
+    path: "{{ ollama_models_dir }}"
+    state: directory
+    owner: ollama
+    group: ollama
+    recurse: true
 
 - name: Create the Ollama systemd drop-in directory
   ansible.builtin.file:
