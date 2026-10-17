@@ -113,13 +113,71 @@ responsible for what visitors upload. Public use slows down the metacheck app th
 uses the same bibr; a separate public bibr workspace avoids that. Reference
 lookups at Crossref are made with `bibr_crossref_email` as contact address.
 
-## A public metacheck app
+## The website
 
-The paper report app can be opened to anyone in the same way. On the metacheck
-workspace (or with `metacheck_public = true` when it is created):
+The workspace address (`https://<workspace>/`) shows a small website (`site/`): one
+page, in three columns, for the three things the web interface below does:
+
+1. **Run Metacheck on a Paper**: a PDF (or bibr JSON) in, Metacheck's report out,
+   with the default checks ticked and the others (which contact other services) to
+   choose.
+2. **Run Metacheck on a Repository**: a folder, chosen or dropped onto the page, or a .zip. The
+   browser packs a folder into a .zip ([JSZip](https://stuk.github.io/jszip/),
+   served from the workspace) and leaves out `.git`, `.svn` and `.hg` folders; it
+   refuses a folder over 1000 MB or 20,000 files, and a .zip over 500 MB, before
+   uploading.
+3. **Convert a Paper with bibr**: a PDF in, bibr's JSON out.
+
+Columns 1 and 3 have an unticked box "Look up the references at Crossref". Only when
+it is ticked does bibr complete the reference list through Crossref, which sends the
+paper's reference list to Crossref; with the default settings nothing leaves the
+workspace. (The checks that can be ticked in column 1, such as Reference Accuracy
+and PubPeer Comments, contact their own services.)
+
+While a job runs the page shows the upload, the place in the queue and each step;
+the report then opens in a new tab or can be downloaded. The page is static files
+served by nginx (`location /site/`; the root is passed to it by `00-root.conf`) and
+needs nothing on the server beyond the web interface. The font is
+[Cabin](https://github.com/impallari/Cabin), a humanist sans serif (SIL Open Font
+License, `site/fonts/OFL-Cabin.txt`), also served from the workspace, so visitors'
+browsers contact no other site. The colours are
+metacheck's logo green and a light grey.
+
+Tested in Edge (Playwright): a PDF report, a conversion and a folder check at the
+same time, a chosen .zip, a wrong file, the list of checks, and the layout at 375,
+500 and 1400 pixels wide. Not tested: dropping a folder onto the page (the
+browser's drag and drop cannot be scripted with real folders).
+
+## Use counts
+
+Every finished job of the web interface (from the website or from code) adds one
+line to `api_usage.csv` in `METACHECK_USAGE_DIR` (`/data/<volume>/metacheck-usage`,
+or `/var/lib/metacheck-usage` without a volume), with the columns of metacheck's own
+app counts plus three: `date, event, reports, modules, status, source, visitor`.
+`event` is the tool (`report`, `repocheck`, `convert`, `check`), `source` is
+`website` or `code`. No file names, titles or contents are kept.
+
+`visitor` counts unique visitors per day: a 16-character code made from the
+visitor's internet address and browser name and a random secret that is replaced
+every day (`.daily-secret`, readable by the shiny user only). Within a day the same
+visitor gets the same code; once the secret is replaced, a code cannot be traced back
+to an address. A visitor who returns on another day counts again, and people sharing
+one address and browser on one day count as one. The paper report app writes its own
+counts (`shiny_app_usage.csv`, metacheck's `usage_record()`) to the same folder.
 
 ```
-sudo metacheck-public on       # open:   https://<workspace>/metacheck/ without login
+sudo metacheck-usage           # per month: jobs per tool, succeeded, website/code, visitors
+sudo metacheck-usage --daily   # per day
+```
+
+## A public metacheck app
+
+The website, the paper report app and the web interface can be opened to anyone in
+the same way. On the metacheck workspace (or with `metacheck_public = true` when it
+is created):
+
+```
+sudo metacheck-public on       # open:   https://<workspace>/, /metacheck/ and /api/ without login
 sudo metacheck-public off      # SRAM login required again
 metacheck-public status
 ```
@@ -169,6 +227,13 @@ Size limits: PDFs and bibr JSON at most 50 MB; a .zip at most 500 MB, at most
 folder (the app's limits). Larger uploads get HTTP 413 with a JSON `error`. A
 480 MB .zip took 43 s to upload from a university network. New jobs are refused
 while less than 10 GB is free where the jobs are kept.
+
+bibr completes references through Crossref only when a request includes
+`crossref=true` (form field); the default is `false`, so the paper's reference
+list is not sent to Crossref. bibr stores conversions with and without Crossref
+separately, so one never stands in for the other. The paper report app does the
+same: its "Query CrossRef" box (unticked by default) now also decides whether bibr
+uses Crossref.
 
 Every paper or folder becomes a job in one queue, whichever request sent it. At most two jobs
 run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
@@ -349,8 +414,8 @@ kept in this repository or in SRC.
 4. Installs R and its packages as Ubuntu binaries from
    [r2u](https://eddelbuettel.github.io/r2u/), Quarto 1.10.19, Shiny Server 1.5.23,
    and metacheck from GitHub; serves `app/` at `/metacheck/`.
-5. With SRC-Nginx: `/metacheck/` and `/metacheck-status`; the workspace root goes
-   to `/metacheck/`.
+5. With SRC-Nginx: the website at the workspace root (`/site/`), the app at
+   `/metacheck/`, the web interface at `/api/`, and `/metacheck-status`.
 
 A repeat run of either component changes nothing but its progress log and restarts
 no service.
@@ -456,5 +521,7 @@ sudo ~/ansible-env/bin/ansible-playbook --connection=local -i localhost, -b meta
 ## Licence
 
 The files in `app/` are derived from metacheck and are therefore under AGPL-3.0.
+`site/fonts/` holds Cabin under the SIL Open Font License 1.1 (`OFL-Cabin.txt`), and
+`site/vendor/jszip.min.js` is JSZip 3.10.1 under the MIT licence (or GPLv3).
 No licence has been chosen yet for the other files in this repository. bibr and
 metacheck are AGPL-3.0 and are installed from their own repositories.

@@ -1,15 +1,29 @@
 # Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
 # Included from the SRC-Nginx server block (/etc/nginx/conf.d/tls_main.conf),
 # which already terminates TLS and defines /validate and @custom_401 for the
-# SRAM login. The progress page always requires that login; the app only in
-# the "login" variant. The workspace root (/) is redirected by 00-root.conf,
-# which this component writes.
+# SRAM login. The progress page always requires that login; the website, the
+# app and the web interface only in the "login" variant. The workspace root
+# (/) shows the website, through 00-root.conf, which this component writes.
 
 # This file comes in two variants, made from the same template and kept in
 # /opt/metacheck-component/nginx/: "login" (SRAM login for the app) and
 # "public" (the app open to anyone). `sudo metacheck-public on|off` copies the
 # chosen one to /etc/nginx/app-location-conf.d/metacheck.conf.
 # This is the {{ 'PUBLIC' if (metacheck_nginx_public | bool) else 'LOGIN' }} variant.
+
+# The website (site/: one static page that uses the web interface below).
+# The workspace root (/) shows it, through 00-root.conf.
+location /site/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone (static files only; uploads go to /api/).
+{% else %}
+    error_page 401 = @custom_401;
+    auth_request /validate;
+{% endif %}
+    alias {{ metacheck_component_dir }}/site/;
+    index index.html;
+    add_header Cache-Control "no-cache";
+}
 
 # metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
 location /metacheck/ {

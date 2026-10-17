@@ -309,7 +309,10 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
   # The local bibr is called by this app's own client (bibr_client.R).
   if (identical(convert_args$method, "bibr")) {
     source("bibr_client.R")
-    json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url)
+    # bibr completes the references through Crossref only when the visitor
+    # ticked "Query CrossRef" (which sends the reference list to Crossref).
+    json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url,
+                         crossref = isTRUE(use_crossref))
   } else {
     json <- do.call(metacheck::convert,
                     c(list(pdf_path, tmp, crossref_lookup = FALSE), convert_args))

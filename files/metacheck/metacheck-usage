@@ -1,0 +1,75 @@
+#!/usr/bin/env Rscript
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Summarises the anonymous use counts of the website / web interface
+# (api_usage.csv) and of the paper report app (shiny_app_usage.csv), kept in
+# METACHECK_USAGE_DIR.
+#
+#   sudo metacheck-usage           per month
+#   sudo metacheck-usage --daily   per day
+#
+# "visitors" counts unique visitors per day: a visitor's code changes every
+# day, so a person who comes back on another day is counted again, and people
+# who share one internet address and browser on the same day count as one.
+
+args <- commandArgs(trailingOnly = TRUE)
+daily <- "--daily" %in% args
+
+dir <- Sys.getenv("METACHECK_USAGE_DIR")
+if (!nzchar(dir)) {
+  env <- tryCatch(readLines("/home/shiny/.Renviron", warn = FALSE), error = function(e) character(0))
+  hit <- grep("^METACHECK_USAGE_DIR=", env, value = TRUE)
+  if (length(hit)) dir <- sub("^METACHECK_USAGE_DIR=", "", hit[1])
+}
+if (!nzchar(dir) || !dir.exists(dir)) stop("No use counts found (METACHECK_USAGE_DIR is not set or does not exist).")
+
+period <- function(date) if (daily) as.character(date) else substr(as.character(date), 1, 7)
+read_csv <- function(f) {
+  p <- file.path(dir, f)
+  if (!file.exists(p)) return(NULL)
+  d <- utils::read.csv(p, stringsAsFactors = FALSE)
+  if (!nrow(d)) NULL else d
+}
+show <- function(x) print(x, row.names = FALSE, right = FALSE)
+
+api <- read_csv("api_usage.csv")
+cat("Website and web interface (", file.path(dir, "api_usage.csv"), ")\n", sep = "")
+if (is.null(api)) {
+  cat("  no jobs yet\n")
+} else {
+  api$period <- period(api$date)
+  api$tool <- c(report = "paper report", repocheck = "repository check",
+                convert = "bibr conversion", check = "paper check (JSON)")[api$event]
+  api$tool[is.na(api$tool)] <- api$event[is.na(api$tool)]
+  keys <- unique(api[, c("period", "tool")])
+  keys <- keys[order(keys$period, keys$tool), ]
+  out <- do.call(rbind, lapply(seq_len(nrow(keys)), function(i) {
+    d <- api[api$period == keys$period[i] & api$tool == keys$tool[i], ]
+    data.frame(period = keys$period[i], tool = keys$tool[i],
+               jobs = nrow(d),
+               succeeded = sum(d$status == "done"),
+               from_website = sum(d$source == "website"),
+               from_code = sum(d$source != "website"),
+               # unique per day, added up over the days in the period
+               visitors = nrow(unique(d[nzchar(d$visitor), c("date", "visitor")])))
+  }))
+  names(out)[1] <- if (daily) "day" else "month"
+  show(out)
+  tot <- unique(api[nzchar(api$visitor), c("date", "visitor")])
+  cat("\nAll tools together: ", nrow(api), " jobs; ", nrow(tot),
+      " visitors (unique per day, added up over all days)\n", sep = "")
+}
+
+app <- read_csv("shiny_app_usage.csv")
+cat("\nPaper report app at /metacheck/ (", file.path(dir, "shiny_app_usage.csv"), ")\n", sep = "")
+if (is.null(app)) {
+  cat("  no use yet\n")
+} else {
+  app$period <- period(app$date)
+  out <- do.call(rbind, lapply(sort(unique(app$period)), function(p) {
+    d <- app[app$period == p, ]
+    data.frame(period = p, sessions = sum(d$event == "session"),
+               reports = sum(d$reports[d$event == "report"]))
+  }))
+  names(out)[1] <- if (daily) "day" else "month"
+  show(out)
+}

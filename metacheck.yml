@@ -187,6 +187,13 @@
     - name: Find a large disk for model files and jobs
       ansible.builtin.include_tasks: tasks/large_disk.yml
 
+    # Anonymous use counts of the app and the web interface (metacheck's
+    # METACHECK_USAGE_DIR), on the storage volume when there is one, so they
+    # outlive the workspace.
+    - name: Choose the folder for use counts
+      ansible.builtin.set_fact:
+        metacheck_usage_dir: "{{ (large_disk ~ '/metacheck-usage') if large_disk is match('/data/') else '/var/lib/metacheck-usage' }}"
+
     - name: Install Ollama and pull the model
       ansible.builtin.include_tasks: tasks/ollama.yml
       vars:
@@ -338,6 +345,14 @@
         mode: "0644"
       register: shiny_conf
 
+    - name: Create the folder for use counts
+      ansible.builtin.file:
+        path: "{{ metacheck_usage_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
+
     - name: Write environment for the shiny user (bibr token, LLM keys)
       ansible.builtin.template:
         src: templates/metacheck/Renviron.j2
@@ -386,6 +401,14 @@
       register: api_helpers
       changed_when: "'changed' in api_helpers.stdout"
 
+    - name: Install the command that summarises the use counts
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-usage
+        dest: /usr/local/sbin/metacheck-usage
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Install the web interface
       ansible.builtin.copy:
         src: "{{ item.src }}"
@@ -398,6 +421,16 @@
         - { src: api/worker.R, dest: worker.R }
         - { src: app/bibr_client.R, dest: bibr_client.R }
       register: api_files
+
+    # The website: static files, served by nginx (location /site/).
+    - name: Install the website
+      ansible.builtin.copy:
+        src: site/
+        dest: "{{ metacheck_component_dir }}/site/"
+        owner: root
+        group: root
+        mode: u=rwX,go=rX
+        directory_mode: "0755"
 
     # Job folders (uploads while queued, results for one hour), shiny only;
     # on the storage volume when there is one. Recursive, because a reused
@@ -515,14 +548,16 @@
           or metacheck_variants.changed or metacheck_limit.changed)
       register: metacheck_nginx
 
-    - name: Send the workspace root to the metacheck app
+    - name: Show the website at the workspace root
       ansible.builtin.copy:
         dest: /etc/nginx/app-location-conf.d/00-root.conf
         mode: "0644"
         content: |
           # Managed by the scienceverse/surf-research-cloud components.
+          # The root shows the metacheck website (location /site/, which also
+          # decides whether a login is needed).
           location = / {
-              return 302 /metacheck/;
+              rewrite ^ /site/ last;
           }
       when: nginx_locations.stat.exists
       register: root_nginx

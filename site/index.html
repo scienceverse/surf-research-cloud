@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metacheck</title>
+<meta name="description" content="An Automated Tool to Check for Best Practices in Scientific Articles. Runs on SURF Research Cloud.">
+<link rel="icon" type="image/png" href="/site/images/logo.png">
+<link rel="stylesheet" href="/site/site.css">
+</head>
+<body>
+
+<header class="masthead">
+  <img class="logo" src="/site/images/logo.png" alt="Metacheck logo" width="76" height="88">
+  <h1>Metacheck</h1>
+  <p class="subtitle">An Automated Tool to Check for Best Practices in Scientific Articles</p>
+</header>
+
+<main>
+  <p class="intro">Metacheck screens scientific manuscripts to identify potential issues or areas for improvement and guide researchers in adopting best practices. It is a module based open source tool. For information on the available modules, see the <a href="https://www.scienceverse.org/metacheck_book/" target="_blank" rel="noopener">manual</a>. Upload a paper or a folder below and you will receive a report with automated checks within minutes. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, with an open source language model. This tool is GDPR compliant.</p>
+
+  <div class="columns">
+
+    <!-- 1. Metacheck on a paper -->
+    <section class="tool" id="tool-report" data-kind="report">
+      <div class="numeral">1</div>
+      <h2>Run Metacheck on a Paper</h2>
+      <p>Upload a paper as a PDF or bibr JSON file and receive Metacheck's report as a web page.</p>
+      <label class="drop" data-accept="pdf-json">
+        <input type="file" accept=".pdf,.json,application/pdf,application/json">
+        <span class="drop-text">Choose a PDF, or drop it here</span>
+      </label>
+      <details class="checks">
+        <summary>Checks <span class="checks-count"></span></summary>
+        <p class="note">The default checks need no other service and are quick. The others contact services such as Crossref, PubPeer, the Retraction Watch database, OSF or GitHub, and can take several minutes.</p>
+        <div class="check-list"><p class="note">Loading the list of checks&hellip;</p></div>
+      </details>
+      <label class="crossref"><input type="checkbox" class="use-crossref"> Look up the references at Crossref <span class="note">(sends the paper's reference list to Crossref in the USA)</span></label>
+      <button type="button" class="go" disabled>Make the report</button>
+      <div class="status" hidden></div>
+    </section>
+
+    <!-- 2. Metacheck on a repository -->
+    <section class="tool" id="tool-folder" data-kind="repocheck">
+      <div class="numeral">2</div>
+      <h2>Run Metacheck on a Repository</h2>
+      <p>Choose a folder with data and code, and receive a report that checks for FAIR principles.</p>
+      <div class="drop drop-folder" tabindex="0">
+        <span class="drop-text">Drop a folder or a .zip file here</span>
+        <span class="drop-buttons">
+          <label class="small-button">Choose a folder<input type="file" class="pick-folder" webkitdirectory multiple></label>
+          <label class="small-button">Choose a .zip<input type="file" class="pick-zip" accept=".zip,application/zip"></label>
+        </span>
+      </div>
+      <p class="note">Your browser packs the folder into a .zip before uploading it, at most 500 MB (1000 MB unpacked).</p>
+      <button type="button" class="go" disabled>Check the repository</button>
+      <div class="status" hidden></div>
+    </section>
+
+    <!-- 3. Convert a paper -->
+    <section class="tool" id="tool-convert" data-kind="convert">
+      <div class="numeral">3</div>
+      <h2>Convert a Paper with bibr</h2>
+      <p>Turn a PDF into a structured JSON file with <a href="https://github.com/scienceverse/bibr" target="_blank" rel="noopener">bibr</a>.</p>
+      <label class="drop" data-accept="pdf">
+        <input type="file" accept=".pdf,application/pdf">
+        <span class="drop-text">Choose a PDF, or drop it here</span>
+      </label>
+      <label class="crossref"><input type="checkbox" class="use-crossref"> Look up the references at Crossref <span class="note">(sends the paper's reference list to Crossref in the USA)</span></label>
+      <button type="button" class="go" disabled>Convert to JSON</button>
+      <div class="status" hidden></div>
+    </section>
+
+  </div>
+
+  <section class="about">
+    <h2>What happens to your files</h2>
+    <p>Uploaded files are deleted as soon as they have been read. Reports are kept for one hour. A report can only be fetched with its random job number, which only your browser knows. Nothing is sent to external services, the tool is fully GDPR compliant.</p>
+
+    <h2>Use it from your own code</h2>
+    <p>Every tool on this page is also a web interface you can call from R, Python, PowerShell or the command line, for example:</p>
+    <pre><code id="curl-example">curl -F file=@paper.pdf https://this-server/api/report -o report.html</code></pre>
+    <p>See the <a href="/api/__docs__/">interactive documentation</a> and the <a href="https://github.com/scienceverse/surf-research-cloud#the-web-interface-a-report-from-any-programming-language" target="_blank" rel="noopener">examples</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <p><a href="https://www.scienceverse.org/metacheck/" target="_blank" rel="noopener">Metacheck</a> and <a href="https://github.com/scienceverse/bibr" target="_blank" rel="noopener">bibr</a> are open source software by <a href="https://github.com/scienceverse" target="_blank" rel="noopener">scienceverse</a>. Report problems on <a href="https://github.com/scienceverse/metacheck/issues" target="_blank" rel="noopener">GitHub</a>. <span id="version"></span></p>
+</footer>
+
+<script src="/site/vendor/jszip.min.js"></script>
+<script src="/site/site.js"></script>
+</body>
+</html>

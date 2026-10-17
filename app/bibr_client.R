@@ -16,14 +16,19 @@
 #' @param api_url bibr server address (BIBR_API_URL).
 #' @param api_key bearer token (BIBR_API_KEY); none is sent when empty.
 #' @param timeout seconds to wait for the extraction.
+#' @param crossref TRUE or FALSE: whether bibr completes the references
+#'   through Crossref (which sends the reference list to Crossref); NULL
+#'   leaves it to the bibr server's own setting (CROSSREF_ENRICH).
 #' @return path to the JSON file, readable with metacheck::read().
 bibr_convert <- function(pdf_path, save_dir,
                          api_url = Sys.getenv("BIBR_API_URL"),
                          api_key = Sys.getenv("BIBR_API_KEY"),
-                         timeout = 900) {
+                         timeout = 900, crossref = NULL) {
+  fields <- list(file = curl::form_file(pdf_path))
+  if (!is.null(crossref)) fields$crossref <- if (isTRUE(crossref)) "true" else "false"
   req <- httr2::request(api_url) |>
     httr2::req_url_path_append("papers", "extract") |>
-    httr2::req_body_multipart(file = curl::form_file(pdf_path)) |>
+    httr2::req_body_multipart(!!!fields) |>
     httr2::req_timeout(timeout) |>
     httr2::req_error(is_error = function(resp) FALSE)
   if (nzchar(api_key)) req <- httr2::req_auth_bearer_token(req, api_key)

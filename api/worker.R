@@ -121,7 +121,8 @@ do_job <- function(job_dir) {
     # 1. bibr JSON: convert the PDF, or use the uploaded JSON
     if (job$input_kind == "pdf") {
       .set_status(job_dir, step = "converting the PDF with bibr")
-      json <- bibr_convert(input, job_dir)            # writes <job_dir>/input.json
+      # bibr uses Crossref only when asked (it sends the reference list there)
+      json <- bibr_convert(input, job_dir, crossref = isTRUE(job$crossref))  # writes <job_dir>/input.json
     } else {
       json <- input
     }

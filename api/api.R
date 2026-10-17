@@ -41,6 +41,9 @@ JOB_TIMEOUT_MINUTES <- 30
 MAX_UPLOAD_BYTES <- 50 * 1024^2     # PDF or bibr JSON
 MAX_ZIP_BYTES <- 500 * 1024^2       # .zip of a data/code folder (as metacheck's repocheck app)
 MIN_FREE_DISK_MB <- 10000           # refuse new jobs when less is free (as the repocheck app)
+# Use log: one line per finished job, in metacheck's usage folder (as the app's
+# own counts). See .usage_record().
+USAGE_DIR <- Sys.getenv("METACHECK_USAGE_DIR", file.path(JOBS_DIR, "..", "metacheck-usage"))
 
 # The modules the paper report app offers (app/app.R, VALIDATED_MODULES).
 ALLOWED_MODULES <- c(
@@ -82,6 +85,49 @@ running <- new.env()          # job id -> callr process
   q[order(seq)]
 }
 
+# ---- use log -----------------------------------------------------------------
+# One line per finished job in api_usage.csv, with the columns of metacheck's
+# own app counts (date, event, reports, modules) plus: status (done/failed),
+# source (website/code) and visitor. No file names, titles or contents.
+# `visitor` stands for one visitor on one day: a code made from the visitor's
+# internet address and browser name and a random secret that is replaced every
+# day, so the same visitor gets the same code within a day only, and once the
+# day's secret is gone a code cannot be traced back to an address.
+.daily_secret <- function() {
+  dir.create(USAGE_DIR, showWarnings = FALSE, recursive = TRUE, mode = "0700")
+  path <- file.path(USAGE_DIR, ".daily-secret")
+  today <- format(Sys.Date())
+  old <- tryCatch(readLines(path, warn = FALSE), error = function(e) character(0))
+  if (length(old) == 2 && identical(old[1], today)) return(old[2])
+  secret <- paste(sample(c(letters, LETTERS, 0:9), 40, replace = TRUE), collapse = "")
+  tmp <- tempfile(tmpdir = USAGE_DIR)
+  writeLines(c(today, secret), tmp)
+  Sys.chmod(tmp, "0600")
+  file.rename(tmp, path)
+  secret
+}
+
+.visitor_code <- function(req) {
+  ip <- req$HTTP_X_REAL_IP %||% req$REMOTE_ADDR %||% ""
+  agent <- req$HTTP_USER_AGENT %||% ""
+  substr(digest::digest(paste(.daily_secret(), ip, agent, sep = "|"),
+                        algo = "sha256", serialize = FALSE), 1, 16)
+}
+
+.usage_record <- function(id, status) {
+  tryCatch({
+    job <- jsonlite::read_json(file.path(.job_dir(id), "job.json"))
+    row <- data.frame(
+      date = format(Sys.Date()), event = job$kind,
+      reports = as.integer(identical(status, "done") && job$kind != "convert"),
+      modules = if (job$kind == "repocheck") 3L else length(unlist(job$modules)),
+      status = status, source = job$source %||% "code", visitor = job$visitor %||% "")
+    path <- file.path(USAGE_DIR, "api_usage.csv")
+    utils::write.table(row, path, sep = ",", row.names = FALSE,
+                       col.names = !file.exists(path), append = file.exists(path))
+  }, error = function(e) message("use log: ", conditionMessage(e)))
+}
+
 .position <- function(id) {
   p <- match(id, .queued_ids())
   if (is.na(p)) NA_integer_ else p
@@ -117,6 +163,7 @@ running <- new.env()          # job id -> callr process
           st$error <- "The job stopped unexpectedly."
           .write_status(id, st)
         }
+        .usage_record(id, st$status)
         unlink(file.path(.job_dir(id), "worker.log"))
       } else {
         started <- as.POSIXct(.read_status(id)$started %||% .now(), format = "%Y-%m-%dT%H:%M:%S%z")
@@ -128,6 +175,7 @@ running <- new.env()          # job id -> callr process
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
           st$error <- sprintf("The job took longer than %d minutes and was stopped.", JOB_TIMEOUT_MINUTES)
           .write_status(id, st)
+          .usage_record(id, "failed")
         }
       }
     }
@@ -214,6 +262,8 @@ later::later(.scheduler, 1)
   as.numeric(strsplit(trimws(out[length(out)]), "[[:space:]]+")[[1]][4]) / 1024
 }
 
+.parse_flag <- function(x) tolower(trimws(x %||% "false")) %in% c("true", "1", "yes")
+
 .parse_modules <- function(param) {
   mods <- if (!is.null(param) && nzchar(param)) trimws(strsplit(param, ",")[[1]]) else DEFAULT_MODULES
   bad <- setdiff(mods, ALLOWED_MODULES)
@@ -256,7 +306,10 @@ later::later(.scheduler, 1)
   writeBin(up$raw, file.path(.job_dir(id), input))
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
                             name = up$name,
-                            report = tolower(up$fields$report %||% "false") %in% c("true", "1", "yes")),
+                            crossref = .parse_flag(up$fields$crossref),
+                            source = if (identical(up$fields$source, "website")) "website" else "code",
+                            visitor = .visitor_code(req),
+                            report = .parse_flag(up$fields$report)),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
   .write_status(id, list(status = "queued", step = "waiting in the queue", created = .now(),
                         seq = as.numeric(Sys.time())))
@@ -370,11 +423,22 @@ function() {
        workers = MAX_WORKERS)
 }
 
-#* The modules that may be requested (and the default set)
+# Each allowed module's title and description, from metacheck's module list
+# (the titles the paper report app shows).
+MODULE_INFO <- tryCatch({
+  ml <- as.data.frame(metacheck::module_list())
+  ml <- ml[match(ALLOWED_MODULES, ml$name), c("name", "title", "description")]
+  ml$description <- trimws(gsub("[[:space:]]+", " ", ml$description))
+  ml$default <- ml$name %in% DEFAULT_MODULES
+  rownames(ml) <- NULL
+  ml
+}, error = function(e) NULL)
+
+#* The modules that may be requested, the default set, and each one's title and description
 #* @get /modules
 #* @serializer json
 function() {
-  list(allowed = ALLOWED_MODULES, default = DEFAULT_MODULES)
+  list(allowed = ALLOWED_MODULES, default = DEFAULT_MODULES, info = MODULE_INFO)
 }
 
 #* Submit a job; answers at once with the job's id and where to follow it
@@ -385,6 +449,7 @@ function() {
 #* @param kind "report" (default), "check", "convert" or "repocheck"
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param report "true" to include the HTML report in a check result (optional)
+#* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @serializer unboxedJSON
 function(req, res) {
   id <- tryCatch(.submit(req), error = function(e) e)
@@ -419,6 +484,7 @@ function(id, res) {
 #* @parser octet
 #* @param file:file The PDF or bibr JSON
 #* @param modules Comma-separated module names (optional; see GET /modules)
+#* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 function(req, res) .one_call(req, res, "report")
 
 #* Run metacheck modules on a PDF or bibr JSON and return the results as JSON, in one call
@@ -427,6 +493,7 @@ function(req, res) .one_call(req, res, "report")
 #* @parser octet
 #* @param file:file The PDF or bibr JSON
 #* @param modules Comma-separated module names (optional; see GET /modules)
+#* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 #* @param report "true" to include the HTML report as report_html (optional, default false)
 function(req, res) .one_call(req, res, "check")
 
@@ -435,6 +502,7 @@ function(req, res) .one_call(req, res, "check")
 #* @parser multi
 #* @parser octet
 #* @param file:file The PDF
+#* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 function(req, res) .one_call(req, res, "convert")
 
 #* Check a data and code folder (.zip, at most 500 MB) with repo_check, code_check and data_check, in one call; returns the HTML report

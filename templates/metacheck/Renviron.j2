@@ -15,6 +15,10 @@ OLLAMA_BASE_URL={{ ollama_url }}
 METACHECK_LLM_MODEL={{ metacheck_llm_model }}
 {% endif %}
 
+# Anonymous use counts of the app (metacheck's usage_record()) and of the web
+# interface (api_usage.csv); `sudo metacheck-usage` summarises them.
+METACHECK_USAGE_DIR={{ metacheck_usage_dir }}
+
 # Keys for the app's optional cloud model providers.
 {% if metacheck_mistral_api_key != 'none' %}
 MISTRAL_API_KEY={{ metacheck_mistral_api_key }}

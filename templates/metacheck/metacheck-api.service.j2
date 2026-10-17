@@ -11,6 +11,7 @@ User=shiny
 Group=shiny
 Environment=HOME=/home/shiny
 Environment=METACHECK_API_JOBS={{ metacheck_api_jobs_dir }}
+Environment=METACHECK_USAGE_DIR={{ metacheck_usage_dir }}
 WorkingDirectory={{ metacheck_component_dir }}/api
 ExecStart=/usr/bin/Rscript -e 'plumber::pr_run(plumber::plumb("api.R"), host = "127.0.0.1", port = {{ metacheck_api_port }}, docs = TRUE)'
 Restart=always
