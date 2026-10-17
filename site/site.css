@@ -173,6 +173,14 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
 .small-button:hover { background: var(--green); color: #fff; }
 .small-button input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
 
+.repo-link { display: block; margin: 4px 0 4px; font-weight: 600; font-size: 0.95rem; }
+.repo-link input {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--green-light); border-radius: 3px; background: #fff;
+  font: inherit; font-weight: 400;
+}
+.repo-link input:focus { outline: 2px solid var(--green); outline-offset: 0; }
+
 /* ---- module choice ---- */
 .checks { margin: 0 0 14px; }
 .checks summary { cursor: pointer; font-weight: 600; color: var(--green); }

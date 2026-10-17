@@ -93,9 +93,9 @@ async function runJob(section, file, filename, kind, fields, ui) {
   form.append("kind", kind);
   form.append("source", "website");   // for the use log: website or code
   for (const [k, v] of Object.entries(fields || {})) form.append(k, v);
-  form.append("file", file, filename);
+  if (file) form.append("file", file, filename);
 
-  ui.progress(0, "Uploading " + sizeText(file.size) + "…");
+  ui.progress(0, file ? "Uploading " + sizeText(file.size) + "…" : "Sending the link…");
   const r = await upload(form, f => ui.progress(f, "Uploading: " + Math.round(f * 100) + "%"));
   if (r.status !== 202) throw new Error(await errorText(r));
   const job = await r.json();
@@ -286,7 +286,8 @@ function setupFolderTool(section) {
   const button = section.querySelector("button.go");
   const pickFolder = drop.querySelector(".pick-folder");
   const pickZip = drop.querySelector(".pick-zip");
-  let chosen = null;   // { zip: File } or { files: [{file, path}], name }
+  const urlInput = section.querySelector(".repo-url");
+  let chosen = null;   // { zip: File }, { files: [{file, path}], name } or { url }
 
   function reset() {
     chosen = null;
@@ -295,8 +296,22 @@ function setupFolderTool(section) {
     text.textContent = "Drop a folder or a .zip file here";
   }
 
+  // A link replaces a chosen folder or .zip, and the other way round.
+  urlInput.addEventListener("input", () => {
+    const url = urlInput.value.trim();
+    if (url) {
+      reset();
+      section.querySelector(".status").hidden = true;
+      chosen = { url };
+      button.disabled = false;
+    } else if (chosen && chosen.url) {
+      reset();
+    }
+  });
+
   function chooseZip(file) {
     reset();
+    urlInput.value = "";
     if (!/\.zip$/i.test(file.name)) { statusArea(section).error("Choose a folder or a .zip file."); return; }
     if (file.size > LIMITS.zip) {
       statusArea(section).error("This .zip file is " + sizeText(file.size) + "; the limit is 500 MB. Leave out large data or output files that do not need checking.");
@@ -311,6 +326,7 @@ function setupFolderTool(section) {
 
   function chooseFiles(all) {
     reset();
+    urlInput.value = "";
     const files = all.filter(f => !SKIP.test(f.path));
     if (!files.length) { statusArea(section).error("The folder has no files to check."); return; }
     const total = files.reduce((s, f) => s + f.file.size, 0);
@@ -370,7 +386,13 @@ function setupFolderTool(section) {
   button.addEventListener("click", () => {
     if (!chosen) return;
     const c = chosen;
+    const fields = { run_code: section.querySelector(".run-code").checked ? "true" : "false" };
+    if (c.url) fields.url = c.url;
     start(section, async ui => {
+      if (c.url) {
+        const name = c.url.replace(/^https?:\/\//i, "").replace(/[\/?#]+$/, "").split("/").filter(Boolean).slice(-1)[0] || "repository";
+        return { file: null, filename: null, name };
+      }
       if (c.zip) return { file: c.zip, filename: c.zip.name, name: baseName(c.zip.name) };
       const zip = new JSZip();
       for (const f of c.files) zip.file(f.path, f.file, { date: new Date(f.file.lastModified || Date.now()) });
@@ -383,7 +405,7 @@ function setupFolderTool(section) {
         throw new Error("The packed folder is " + sizeText(blob.size) + "; the limit is 500 MB. Leave out large data or output files that do not need checking.");
       }
       return { file: blob, filename: c.name + ".zip", name: c.name };
-    }, "repocheck", { run_code: section.querySelector(".run-code").checked ? "true" : "false" });
+    }, "repocheck", fields);
   });
 }
 

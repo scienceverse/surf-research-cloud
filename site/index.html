@@ -44,7 +44,7 @@
     <section class="tool" id="tool-folder" data-kind="repocheck">
       <div class="numeral">2</div>
       <h2>Run Metacheck on a Repository</h2>
-      <p>Choose a folder with data and code, and receive a report that checks for FAIR principles.</p>
+      <p>Choose a folder with data and code, or paste a link to an online repository, and receive a report that checks for FAIR principles.</p>
       <div class="drop drop-folder" tabindex="0">
         <span class="drop-text">Drop a folder or a .zip file here</span>
         <span class="drop-buttons">
@@ -53,6 +53,10 @@
         </span>
       </div>
       <p class="note">Your browser packs the folder into a .zip before uploading it, at most 500 MB (1000 MB unpacked).</p>
+      <label class="repo-link"><span>Or paste a link to an online repository</span>
+        <input type="url" class="repo-url" placeholder="https://github.com/user/repo  or  https://osf.io/abcde" autocomplete="off">
+      </label>
+      <p class="note">For a link, the server fetches the public files itself (GitHub, OSF, Zenodo, Dataverse, Dryad, ...): files over 100 MB are skipped, and at most 500 MB is fetched.</p>
       <label class="crossref run-code-label"><input type="checkbox" class="run-code" checked> Also run the R and Python code <span class="note run-code-note">(in a closed sandbox without internet access; this can take several minutes)</span></label>
       <button type="button" class="go" disabled>Check the repository</button>
       <div class="status" hidden></div>

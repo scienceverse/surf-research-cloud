@@ -11,7 +11,8 @@
 #   POST /report               PDF or bibr JSON -> HTML report
 #   POST /check                PDF or bibr JSON -> module results as JSON
 #   POST /convert              PDF              -> bibr JSON
-#   POST /repocheck            .zip of a data/code folder -> HTML report of
+#   POST /repocheck            .zip of a data/code folder, or a link to an
+#                              online repository (field url) -> HTML report of
 #                              repo_check, code_check and data_check
 # Other:
 #   GET  /modules, GET /health; documentation at /__docs__/ (under /api/).
@@ -270,9 +271,17 @@ later::later(.scheduler, 1)
     stop("Send the file as multipart/form-data, in the form field 'file'.", call. = FALSE)
   }
   parts <- webutils::parse_http(body, ctype)
+  fields <- lapply(parts[setdiff(names(parts), "file")], function(p) {
+    if (is.raw(p$value)) rawToChar(p$value) else as.character(p$value)
+  })
   f <- parts[["file"]]
   if (is.null(f) || is.null(f$value) || length(f$value) == 0) {
-    stop("Send exactly one file in the form field 'file'.", call. = FALSE)
+    # no file: a repository check of a link to an online repository
+    if (nzchar(trimws(fields$url %||% ""))) {
+      return(list(raw = NULL, kind = "url", name = "", fields = fields))
+    }
+    stop("Send exactly one file in the form field 'file' (or, for a repository check, a link in the field 'url').",
+         call. = FALSE)
   }
   raw <- f$value
   head4 <- if (length(raw) >= 4) raw[1:4] else raw
@@ -288,9 +297,6 @@ later::later(.scheduler, 1)
   # the uploaded file's name without folders and extension (the report's title)
   name <- tools::file_path_sans_ext(basename(gsub("\\\\", "/", f$filename %||% "")))
   name <- substr(gsub("[[:cntrl:]]", "", name), 1, 120)
-  fields <- lapply(parts[setdiff(names(parts), "file")], function(p) {
-    if (is.raw(p$value)) rawToChar(p$value) else as.character(p$value)
-  })
   list(raw = raw, kind = kind, name = name, fields = fields)
 }
 
@@ -300,6 +306,45 @@ later::later(.scheduler, 1)
                   error = function(e) character(0), warning = function(w) character(0))
   if (length(out) < 2) return(NA_real_)
   as.numeric(strsplit(trimws(out[length(out)]), "[[:space:]]+")[[1]][4]) / 1024
+}
+
+# A link to check: written as the repository check app expects it, and only
+# to a host whose addresses are all on the public internet, so a link cannot
+# make this server fetch from itself or from SURF's private network (the bibr
+# server, Ollama). metacheck only fetches from the repository platforms it
+# knows, but some of those (Dataverse, DSpace) run on any institution's server.
+.private_ip <- function(ip) {
+  if (grepl(":", ip, fixed = TRUE)) {               # IPv6
+    ip <- tolower(ip)
+    return(ip %in% c("::", "::1") || grepl("^(fc|fd|fe8|fe9|fea|feb)", ip) ||
+             grepl("^::ffff:", ip))
+  }
+  o <- suppressWarnings(as.integer(strsplit(ip, ".", fixed = TRUE)[[1]]))
+  if (length(o) != 4 || anyNA(o)) return(TRUE)
+  o[1] %in% c(0, 10, 127) || o[1] >= 224 ||
+    (o[1] == 100 && o[2] >= 64 && o[2] <= 127) ||
+    (o[1] == 169 && o[2] == 254) ||
+    (o[1] == 172 && o[2] >= 16 && o[2] <= 31) ||
+    (o[1] == 192 && o[2] == 168) ||
+    (o[1] == 192 && o[2] == 0 && o[3] %in% c(0, 2)) ||
+    (o[1] == 198 && o[2] %in% c(18, 19))
+}
+
+.check_repo_url <- function(url) {
+  url <- trimws(url %||% "")
+  if (nchar(url) > 500) stop("That link is too long.", call. = FALSE)
+  if (!grepl("^https?://", url, ignore.case = TRUE)) url <- paste0("https://", url)
+  if (!grepl("^https?://[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(/|$)", url)) {
+    stop("That does not look like a link to an online repository, such as https://github.com/user/repo or https://osf.io/abcde.",
+         call. = FALSE)
+  }
+  host <- tolower(sub("^https?://([^/]+).*$", "\\1", url, ignore.case = TRUE))
+  ips <- curl::nslookup(host, multiple = TRUE, error = FALSE)
+  if (is.null(ips) || !length(ips)) stop("The address ", host, " could not be found.", call. = FALSE)
+  if (any(vapply(ips, .private_ip, logical(1)))) {
+    stop("Links to ", host, " are not accepted: it is not on the public internet.", call. = FALSE)
+  }
+  url
 }
 
 .parse_flag <- function(x) tolower(trimws(x %||% "false")) %in% c("true", "1", "yes")
@@ -319,14 +364,18 @@ later::later(.scheduler, 1)
 # from the endpoint (one-call endpoints) or the form field `kind` (/jobs).
 .submit <- function(req, kind = NULL) {
   up <- .parse_upload(req)
-  kind <- kind %||% up$fields$kind %||% "report"
+  kind <- kind %||% up$fields$kind %||% (if (up$kind %in% c("zip", "url")) "repocheck" else "report")
   if (!kind %in% c("report", "check", "convert", "repocheck")) {
     stop("kind must be report, check, convert or repocheck.", call. = FALSE)
   }
   if (kind == "convert" && up$kind != "pdf") stop("convert needs a PDF.", call. = FALSE)
-  if (kind == "repocheck" && up$kind != "zip") {
-    stop("repocheck needs a .zip file of a data and code folder.", call. = FALSE)
+  if (kind == "repocheck" && !up$kind %in% c("zip", "url")) {
+    stop("repocheck needs a .zip file of a data and code folder, or a link to an online repository (field 'url').", call. = FALSE)
   }
+  if (kind != "repocheck" && up$kind == "url") {
+    stop("A link can only be checked as a repository (kind=repocheck, or POST /repocheck).", call. = FALSE)
+  }
+  url <- if (up$kind == "url") .check_repo_url(up$fields$url) else NULL
   if (kind != "repocheck" && up$kind == "zip") {
     stop("A .zip file is checked with kind=repocheck (or POST /repocheck).", call. = FALSE)
   }
@@ -343,9 +392,11 @@ later::later(.scheduler, 1)
   id <- uuid::UUIDgenerate()
   dir.create(.job_dir(id), mode = "0700")
   input <- paste0("input.", up$kind)
-  writeBin(up$raw, file.path(.job_dir(id), input))
+  if (is.null(url)) writeBin(up$raw, file.path(.job_dir(id), input))
+  else writeLines(url, file.path(.job_dir(id), input))
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
-                            name = up$name,
+                            name = if (is.null(url)) up$name else url,
+                            url = url,
                             crossref = .parse_flag(up$fields$crossref),
                             # repository check: run the code too (default yes, where the sandbox is on)
                             run_code = kind == "repocheck" && SANDBOX_ON &&
@@ -491,6 +542,7 @@ function() {
 #* @parser multi
 #* @parser octet
 #* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
+#* @param url for repocheck, instead of a file: a link to an online repository (GitHub, OSF, Zenodo, ...)
 #* @param kind "report" (default), "check", "convert" or "repocheck"
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param report "true" to include the HTML report in a check result (optional)
@@ -555,6 +607,7 @@ function(req, res) .one_call(req, res, "convert")
 #* @post /repocheck
 #* @parser multi
 #* @parser octet
-#* @param file:file The .zip of the folder
+#* @param file:file The .zip of the folder (or, instead, `url`)
+#* @param url A link to an online repository (GitHub, OSF, Zenodo, Dataverse, ...), instead of a .zip; the server fetches its public files
 #* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health)
 function(req, res) .one_call(req, res, "repocheck")

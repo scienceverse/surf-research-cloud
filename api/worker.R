@@ -4,6 +4,7 @@
 #   job.json      what to do: kind (report | check | convert | repocheck),
 #                 modules, report, name (the uploaded file's name)
 #   input.pdf / input.json / input.zip   the upload (deleted once it has been read)
+#   input.url     for a repository check of a link: the link (also in job.json)
 #   repo/, cache/ a folder check's unpacked files (deleted when it ends)
 #   progress.txt  a folder check's progress, written by metacheck's progress code
 #   status.json   written here: status, step, timestamps, error
@@ -55,8 +56,9 @@ source("bibr_client.R")
   for (f in c("render_report.R", "brief_report.R", "shiny_progress.R")) {
     sys.source(file.path(dir, f), envir = env)
   }
-  wanted <- c("MAX_UPLOAD_MB", "MAX_EXTRACTED_MB", "MAX_ZIP_FILES", "MODULES",
-              "MODULE_LABELS", "check_zip", "extract_zip", "explain_error")
+  wanted <- c("MAX_UPLOAD_MB", "MAX_EXTRACTED_MB", "MAX_ZIP_FILES", "MAX_FILE_MB",
+              "MAX_DOWNLOAD_MB", "MODULES", "MODULE_LABELS", "check_zip", "extract_zip",
+              "explain_error", "normalise_repo_url", "download_args")
   for (e in parse(file.path(dir, "app.R"), keep.source = FALSE)) {
     if (is.call(e) && identical(e[[1]], as.name("<-")) && is.name(e[[2]]) &&
         as.character(e[[2]]) %in% wanted) {
@@ -75,26 +77,41 @@ do_repocheck <- function(job_dir, job) {
   on.exit(unlink(c(input, repo, file.path(job_dir, c("unpacked", "cache", "progress.txt"))),
                  recursive = TRUE), add = TRUE)
   tryCatch({
-    .set_status(job_dir, step = "checking the .zip file")
-    rc$check_zip(input)
-    .set_status(job_dir, step = "unpacking the .zip file")
-    title <- if (nzchar(job$name %||% "")) job$name else "data and code folder"
-    unpacked <- rc$extract_zip(input, file.path(job_dir, "unpacked"))
-    unlink(input)
-    # The report names the folder by the path it is given, so the check runs
-    # from inside repo/ on a folder named after the upload (or after the
-    # folder the .zip wraps everything in), not on the full server path.
-    folder <- if (normalizePath(unpacked) == normalizePath(file.path(job_dir, "unpacked"))) title else basename(unpacked)
-    folder <- gsub("[/[:cntrl:]]", "_", folder)
-    if (folder %in% c("", ".", "..")) folder <- "folder"
-    dir.create(repo)
-    file.rename(unpacked, file.path(repo, folder))
-    unlink(file.path(job_dir, "unpacked"), recursive = TRUE)
-    old_wd <- setwd(repo)
-    on.exit(setwd(old_wd), add = TRUE)
-    repo_dir <- folder
-    paper <- metacheck::test_paper()
-    paper$info$title <- title
+    if (identical(job$input_kind, "url")) {
+      # A link to an online repository: metacheck fetches the public files
+      # itself (as the repository check app does), at most MAX_FILE_MB per file
+      # and MAX_DOWNLOAD_MB per repository, into this job's cache folder.
+      url <- rc$normalise_repo_url(job$url)
+      paper <- metacheck::test_paper(text = url, url = url)
+      paper$info$title <- url
+      fetch <- rc$download_args
+      args <- list(code_check = fetch, data_check = fetch)
+      code_place <- c(list(local_only = FALSE), fetch)
+    } else {
+      # A .zip of a folder: checked, unpacked, and checked from inside repo/.
+      .set_status(job_dir, step = "checking the .zip file")
+      rc$check_zip(input)
+      .set_status(job_dir, step = "unpacking the .zip file")
+      title <- if (nzchar(job$name %||% "")) job$name else "data and code folder"
+      unpacked <- rc$extract_zip(input, file.path(job_dir, "unpacked"))
+      unlink(input)
+      # The report names the folder by the path it is given, so the check runs
+      # from inside repo/ on a folder named after the upload (or after the
+      # folder the .zip wraps everything in), not on the full server path.
+      folder <- if (normalizePath(unpacked) == normalizePath(file.path(job_dir, "unpacked"))) title else basename(unpacked)
+      folder <- gsub("[/[:cntrl:]]", "_", folder)
+      if (folder %in% c("", ".", "..")) folder <- "folder"
+      dir.create(repo)
+      file.rename(unpacked, file.path(repo, folder))
+      unlink(file.path(job_dir, "unpacked"), recursive = TRUE)
+      old_wd <- setwd(repo)
+      on.exit(setwd(old_wd), add = TRUE)
+      repo_dir <- folder
+      paper <- metacheck::test_paper()
+      paper$info$title <- title
+      args <- list(repo_check = list(local_path = repo_dir, local_only = TRUE))
+      code_place <- list(local_path = repo_dir, local_only = TRUE)
+    }
     rc$ensure_quarto()
     # metacheck's progress messages go to progress.txt, which api.R shows as
     # the job's step.
@@ -102,7 +119,6 @@ do_repocheck <- function(job_dir, job) {
             metacheck.repo_cache.dir = file.path(job_dir, "cache"))
     modules <- rc$MODULES
     labels <- rc$MODULE_LABELS[rc$MODULES]
-    args <- list(repo_check = list(local_path = repo_dir, local_only = TRUE))
     if (isTRUE(job$run_code)) {
       # metacheck's reproducibility check, running the code: always in the
       # Docker sandbox (api.R gave this process the guard's `docker` and a
@@ -110,10 +126,9 @@ do_repocheck <- function(job_dir, job) {
       # packages (so the network stays closed), at most 5 minutes per script.
       modules <- c(modules, "reproducibility_check")
       labels <- c(labels, reproducibility_check = "Running the R and Python code in the sandbox")
-      args$reproducibility_check <- list(
+      args$reproducibility_check <- c(list(
         execute = TRUE, sandbox = "docker", install_missing = FALSE,
-        docker_use_declared_version = FALSE, timeout = 300,
-        local_path = repo_dir, local_only = TRUE)
+        docker_use_declared_version = FALSE, timeout = 300), code_place)
       options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
       # The sandbox's user (an unused id on this server) must be able to write
       # into the folders metacheck makes for it; they lie inside this job's

@@ -121,7 +121,8 @@ page, in three columns, for the three things the web interface below does:
 1. **Run Metacheck on a Paper**: a PDF (or bibr JSON) in, Metacheck's report out,
    with the default checks ticked and the others (which contact other services) to
    choose.
-2. **Run Metacheck on a Repository**: a folder, chosen or dropped onto the page, or a .zip. The
+2. **Run Metacheck on a Repository**: a folder, chosen or dropped onto the page, a .zip,
+   or a link to an online repository (GitHub, OSF, Zenodo, Dataverse, Dryad, ...). The
    browser packs a folder into a .zip ([JSZip](https://stuk.github.io/jszip/),
    served from the workspace) and leaves out `.git`, `.svn` and `.hg` folders; it
    refuses a folder over 1000 MB or 20,000 files, and a .zip over 500 MB, before
@@ -255,7 +256,7 @@ folder. It follows the same switch as the app: open to anyone while
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
-| `POST /api/repocheck` | .zip of a data and code folder | the HTML report of `repo_check`, `code_check` and `data_check` |
+| `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository | the HTML report of `repo_check`, `code_check` and `data_check` |
 | `GET /api/modules` | | the modules that may be requested, and the default set |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
 | `/api/__docs__/` | | interactive documentation in the browser |
@@ -271,6 +272,15 @@ metacheck branch, and the interface uses its .zip checks, its three modules and 
 short report with a folded file list, so both give the same report. The report names
 the folder after the .zip (or after the one folder the .zip contains), not after its
 place on the server (metacheck issue #500). A small folder takes about 10 s.
+
+Instead of a .zip, a folder check can get a link to an online repository (form
+field `url`, without a file). The server then fetches the public files itself, as the
+repository check app does: files over 100 MB are skipped and at most 500 MB is
+fetched per repository, into the job's own folder. Only links whose host name points
+to public internet addresses are accepted, so a link cannot make the server fetch
+from itself or from SURF's private network (metacheck fetches only from repository
+platforms it knows, but Dataverse and DSpace run on any institution's server).
+A GitHub repository with a Quarto analysis took 15 s, its code run included.
 
 Size limits: PDFs and bibr JSON at most 50 MB; a .zip at most 500 MB, at most
 1000 MB and 20,000 files once unpacked, and without paths that point outside the
@@ -310,6 +320,7 @@ curl -F file=@paper.pdf https://<workspace>/api/report -o report.html
 curl -F file=@paper.pdf -F modules=power,stat_check https://<workspace>/api/check
 curl -F file=@paper.pdf https://<workspace>/api/convert -o paper.json
 curl -F file=@my_study.zip https://<workspace>/api/repocheck -o folder_report.html
+curl -F url=https://github.com/user/repo https://<workspace>/api/repocheck -o repo_report.html
 ```
 
 ```r
