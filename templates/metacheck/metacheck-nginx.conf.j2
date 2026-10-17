@@ -1,14 +1,31 @@
 # Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
 # Included from the SRC-Nginx server block (/etc/nginx/conf.d/tls_main.conf),
 # which already terminates TLS and defines /validate and @custom_401 for the
-# SRAM login. Every location below requires that login. The workspace root
-# (/) is redirected by 00-root.conf, which this component writes.
+# SRAM login. The progress page always requires that login; the app only in
+# the "login" variant. The workspace root (/) is redirected by 00-root.conf,
+# which this component writes.
+
+# This file comes in two variants, made from the same template and kept in
+# /opt/metacheck-component/nginx/: "login" (SRAM login for the app) and
+# "public" (the app open to anyone). `sudo metacheck-public on|off` copies the
+# chosen one to /etc/nginx/app-location-conf.d/metacheck.conf.
+# This is the {{ 'PUBLIC' if (metacheck_nginx_public | bool) else 'LOGIN' }} variant.
 
 # metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
 location /metacheck/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone. Per-visitor limit on POST requests (file uploads and
+    # Shiny's fallback transport), zone defined in
+    # /etc/nginx/conf.d/metacheck-public-limit.conf. The app itself runs at
+    # most 4 reports at once and makes each session wait between reports.
+    limit_req zone=metacheck_public burst=40 nodelay;
+    limit_req_status 429;
+{% else %}
     error_page 401 = @custom_401;
     auth_request /validate;
     auth_request_set $username $upstream_http_username;
+    proxy_set_header X-SRC-Auth-Username $username;
+{% endif %}
 
     proxy_pass http://127.0.0.1:{{ metacheck_shiny_port }}/metacheck/;
     proxy_http_version 1.1;
@@ -16,7 +33,6 @@ location /metacheck/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-SRC-Auth-Username $username;
     # Shiny keeps a websocket open for the whole session.
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;

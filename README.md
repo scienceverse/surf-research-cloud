@@ -113,6 +113,24 @@ responsible for what visitors upload. Public use slows down the metacheck app th
 uses the same bibr; a separate public bibr workspace avoids that. Reference
 lookups at Crossref are made with `bibr_crossref_email` as contact address.
 
+## A public metacheck app
+
+The paper report app can be opened to anyone in the same way. On the metacheck
+workspace (or with `metacheck_public = true` when it is created):
+
+```
+sudo metacheck-public on       # open:   https://<workspace>/metacheck/ without login
+sudo metacheck-public off      # SRAM login required again
+metacheck-public status
+```
+
+The component keeps two variants of the app's nginx file, made from one template,
+in `/opt/metacheck-component/nginx/`; the switch puts one in place and restores the
+previous one if nginx rejects it. While open, POST requests (uploads, and Shiny's
+fallback transport) are limited to 20 per minute per visitor, burst 40; the app
+itself runs at most 4 reports at once and makes each session wait between reports.
+The progress page always requires the SRAM login.
+
 ## Component definitions (SRC portal, Development → Components → +)
 
 | Field | bibr | metacheck |
@@ -159,6 +177,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_ollama_context` | `16384` | Ollama's context window in tokens |
 | `metacheck_mistral_api_key`, `metacheck_groq_api_key` | `none` | keys for the app's cloud model providers (optional) |
 | `metacheck_max_upload` | `100M` | largest PDF nginx accepts |
+| `metacheck_public` | `false` | `true` opens the app to anyone, without the SRAM login (see "A public metacheck app") |
 
 Secrets are generated on the workspace (`/etc/bibr/`, root only); nothing secret is
 kept in this repository or in SRC.

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+#
+# Opens or closes the metacheck paper report app to anyone.
+#   sudo metacheck-public on       anyone can use the app at https://<workspace>/metacheck/
+#   sudo metacheck-public off      SRAM login required
+#   metacheck-public status        show which it is
+# The progress page (/metacheck-status) always requires the SRAM login.
+set -euo pipefail
+
+DIR=/opt/metacheck-component/nginx
+DST=/etc/nginx/app-location-conf.d/metacheck.conf
+HOST=$(hostname -f)
+
+state() { grep -q "This is the PUBLIC variant" "$DST" 2>/dev/null && echo open || echo closed; }
+
+use() {
+  [ "$(id -u)" -eq 0 ] || { echo "Run as: sudo metacheck-public $1" >&2; exit 1; }
+  [ -d /etc/nginx/app-location-conf.d ] || { echo "No SRC-Nginx on this workspace" >&2; exit 1; }
+  cp "$DST" "$DST.previous" 2>/dev/null || true
+  install -m 0644 -o root -g root "$DIR/metacheck-$2.conf" "$DST"
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx
+    rm -f "$DST.previous"
+  else
+    nginx -t || true
+    [ -f "$DST.previous" ] && mv "$DST.previous" "$DST"
+    echo "nginx configuration error: previous setting restored" >&2
+    exit 1
+  fi
+}
+
+case "${1:-status}" in
+  on)
+    use on public
+    echo "The metacheck app is OPEN to anyone: https://$HOST/metacheck/"
+    ;;
+  off)
+    use off login
+    echo "The metacheck app needs the SRAM login again: https://$HOST/metacheck/"
+    ;;
+  status)
+    echo "metacheck app public: $(state)"
+    ;;
+  *)
+    echo "Usage: metacheck-public on|off|status" >&2
+    exit 2
+    ;;
+esac

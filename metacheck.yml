@@ -40,6 +40,9 @@
     metacheck_mistral_api_key: "none"
     metacheck_groq_api_key: "none"
     metacheck_max_upload: "100M"
+    # "true" = the app is open to anyone, without the SRAM login; "false" =
+    # SRAM login. Can be changed later with `sudo metacheck-public on|off`.
+    metacheck_public: "false"
 
     # ---- fixed settings ----
     component_label: "metacheck component"
@@ -350,14 +353,65 @@
         path: /etc/nginx/app-location-conf.d
       register: nginx_locations
 
-    - name: Install nginx locations for metacheck
+    # Two variants of the app's nginx file (SRAM login / open to anyone);
+    # the switch `metacheck-public on|off` puts one of them in place.
+    - name: Create the folder for the nginx variants
+      ansible.builtin.file:
+        path: "{{ metacheck_component_dir }}/nginx"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_locations.stat.exists
+
+    - name: Prepare the nginx variants of the app (login and public)
       ansible.builtin.template:
         src: templates/metacheck/metacheck-nginx.conf.j2
-        dest: /etc/nginx/app-location-conf.d/metacheck.conf
+        dest: "{{ metacheck_component_dir }}/nginx/metacheck-{{ item.name }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        metacheck_nginx_public: "{{ item.public }}"
+      loop:
+        - { name: login, public: false }
+        - { name: public, public: true }
+      when: nginx_locations.stat.exists
+      register: metacheck_variants
+
+    - name: Install the per-visitor limit for the public app
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-public-limit.conf
+        dest: /etc/nginx/conf.d/metacheck-public-limit.conf
         owner: root
         group: root
         mode: "0644"
       when: nginx_locations.stat.exists
+      register: metacheck_limit
+
+    - name: Install the switch `metacheck-public on|off|status`
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-public
+        dest: /usr/local/sbin/metacheck-public
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_locations.stat.exists
+
+    - name: Read whether the app is public now
+      ansible.builtin.command: /usr/local/sbin/metacheck-public status
+      register: metacheck_public_state
+      changed_when: false
+      when: nginx_locations.stat.exists
+
+    # Puts the chosen variant in place (and reloads nginx) when the state
+    # differs, when no variant is in place yet, or when the variants changed.
+    - name: Open or close the app (metacheck_public = {{ metacheck_public }})
+      ansible.builtin.command: /usr/local/sbin/metacheck-public {{ 'on' if metacheck_public | bool else 'off' }}
+      when: >-
+        nginx_locations.stat.exists and (
+          (metacheck_public | bool) != ('open' in metacheck_public_state.stdout)
+          or metacheck_variants.changed or metacheck_limit.changed)
       register: metacheck_nginx
 
     - name: Send the workspace root to the metacheck app
