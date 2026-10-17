@@ -140,6 +140,9 @@ report back. It follows the same switch as the app: open to anyone while
 
 | Request | Send (form field `file`) | Get |
 |---|---|---|
+| `POST /api/jobs` | PDF or bibr JSON; `kind` = `report` (default), `check` or `convert`; optional `modules`, `report=true` | at once (HTTP 202): the job's `id`, `status_url` and `result_url` |
+| `GET /api/jobs/<id>` | | `status` (`queued`, `running`, `done`, `failed`), `step` (such as "running module 3 of 7: stat_check"), `position` in the queue, `error` |
+| `GET /api/jobs/<id>/result` | | the result once `done`; HTTP 409 before that, 422 with `error` if the job failed |
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
@@ -150,10 +153,22 @@ report back. It follows the same switch as the app: open to anyone while
 PDFs are converted by the bibr the component is connected to (bibr itself stays
 closed). Only the modules the app offers can be requested; the default is a quick
 set that needs no other online service (`power`, `marginal`, `ethics_check`,
-`stat_check`, `stat_p_exact`, `stat_p_nonsig`, `stat_effect_size`). Requests are
-handled one at a time: further ones wait. A new 16-page paper took 63 s from
-upload to report; a paper bibr has seen before about 10 s. While public: 6 uploads
-per minute per visitor (burst 6), HTTP 429 beyond that. Papers are not stored.
+`stat_check`, `stat_p_exact`, `stat_p_nonsig`, `stat_effect_size`).
+
+Every paper becomes a job in one queue, whichever request sent it. At most two jobs
+run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
+keeps answering while they run; at most 20 wait, and further uploads get HTTP 503.
+`/jobs` answers at once and suits web pages and long papers; `/report`, `/check` and
+`/convert` keep the connection open until their job is finished, so they are one line
+of code. A job is stopped after 30 minutes. A new 16-page paper took about 60 s from
+upload to report, and three new papers sent together were done after 211 s; a paper
+bibr has seen before takes about 10 s.
+
+Uploads are deleted as soon as a job has read them. Results are deleted 60 minutes
+after the job finished (`METACHECK_API_KEEP_MINUTES`); until then anyone with the
+job's id can fetch them, and the id is a random UUID. While public: 6 uploads per
+minute per visitor (burst 6), beyond that HTTP 429 with a JSON `error`; status and
+result requests are not limited.
 
 Examples (all tested; replace the address with your workspace's):
 
@@ -201,6 +216,33 @@ $r = $client.PostAsync("https://<workspace>/api/report", $form).Result
 ```
 
 (Windows also has `curl.exe`, which takes the curl lines above unchanged.)
+
+With a job, in R and Python (tested):
+
+```r
+library(httr2)
+api <- "https://<workspace>/api"
+job <- request(paste0(api, "/jobs")) |>
+  req_body_multipart(file = curl::form_file("paper.pdf"), kind = "report") |>
+  req_error(is_error = \(r) FALSE) |> req_perform() |> resp_body_json()
+repeat {
+  st <- request(job$status_url) |> req_perform() |> resp_body_json()
+  message(st$status, ": ", st$step)
+  if (st$status %in% c("done", "failed")) break
+  Sys.sleep(5)
+}
+request(job$result_url) |> req_perform(path = "report.html")
+```
+
+```python
+import time, requests
+api = "https://<workspace>/api"
+with open("paper.pdf", "rb") as f:
+    job = requests.post(f"{api}/jobs", files={"file": f}, data={"kind": "report"}).json()
+while (st := requests.get(job["status_url"]).json())["status"] not in ("done", "failed"):
+    print(st["status"], st["step"]); time.sleep(5)
+open("report.html", "wb").write(requests.get(job["result_url"]).content)
+```
 
 The interface reuses metacheck's own API helper code (`inst/plumber/utils`, fetched
 from the same metacheck version, since it is not part of the installed package)

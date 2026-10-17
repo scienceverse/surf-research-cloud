@@ -390,8 +390,18 @@
         mode: "0644"
       loop:
         - { src: api/api.R, dest: api.R }
+        - { src: api/worker.R, dest: worker.R }
         - { src: app/bibr_client.R, dest: bibr_client.R }
       register: api_files
+
+    # Job folders (uploads while queued, results for one hour), shiny only.
+    - name: Create the web interface's job folder
+      ansible.builtin.file:
+        path: /var/lib/metacheck-api/jobs
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
 
     - name: Install the web interface service
       ansible.builtin.template:

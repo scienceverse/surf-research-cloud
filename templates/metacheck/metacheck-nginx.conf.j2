@@ -50,6 +50,7 @@ location /api/ {
     # (zone metacheck_api, /etc/nginx/conf.d/metacheck-public-limit.conf).
     limit_req zone=metacheck_api burst=6 nodelay;
     limit_req_status 429;
+    error_page 429 = @metacheck_api_429;
 {% else %}
     error_page 401 = @custom_401;
     auth_request /validate;
@@ -61,13 +62,23 @@ location /api/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    # plumber handles one request at a time; a report can take minutes
+    # so job links in the answers include /api
+    proxy_set_header X-Forwarded-Prefix /api;
+    # one-call requests wait for their job; a report can take minutes
     proxy_read_timeout 1800s;
     proxy_send_timeout 1800s;
     proxy_request_buffering on;
     client_max_body_size 55M;
 }
 
+{% if metacheck_nginx_public | bool %}
+# The refusal above as JSON, so programs and web pages can show the message.
+location @metacheck_api_429 {
+    default_type application/json;
+    return 429 '{"error":"Too many uploads from your address. Wait a minute and try again."}';
+}
+
+{% endif %}
 # Installation progress of the metacheck component (plain text).
 location = /metacheck-status {
     error_page 401 = @custom_401;
