@@ -39,6 +39,10 @@
     # "auto" = 127.0.0.1 plus the SRC private network address when there is
     # one; "local" = 127.0.0.1 only; or an extra IPv4 address to listen on
     bibr_listen: "auto"
+    # "true" = open bibr to anyone at the workspace's web address, without the
+    # SRAM login (nginx adds the token); "false" = SRAM login only. Can be
+    # changed later on the workspace with `sudo bibr-public on|off`.
+    bibr_public: "false"
 
     # ---- fixed settings ----
     component_label: "bibr component"
@@ -381,9 +385,63 @@
       when: nginx_locations.stat.exists
       register: root_nginx
 
+    # Public entrance: prepared always, switched on only with bibr_public
+    # (or later with `sudo bibr-public on`).
+    - name: Create the folder for the public entrance's nginx file
+      ansible.builtin.file:
+        path: "{{ bibr_component_dir }}/nginx"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: nginx_locations.stat.exists
+
+    - name: Prepare the public entrance (contains bibr's token, root only)
+      ansible.builtin.template:
+        src: templates/bibr/bibr-public-nginx.conf.j2
+        dest: "{{ bibr_component_dir }}/nginx/bibr-public.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      when: nginx_locations.stat.exists
+      no_log: true
+      register: public_conf
+
+    - name: Install the per-visitor limit for the public entrance
+      ansible.builtin.copy:
+        src: files/bibr/bibr-public-limit.conf
+        dest: /etc/nginx/conf.d/bibr-public-limit.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: nginx_locations.stat.exists
+      register: public_limit
+
+    - name: Install the switch `bibr-public on|off|status`
+      ansible.builtin.copy:
+        src: files/bibr/bibr-public
+        dest: /usr/local/sbin/bibr-public
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_locations.stat.exists
+
     - name: Check and reload nginx
       ansible.builtin.shell: nginx -t && systemctl reload nginx
-      when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed)
+      when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed or public_limit.changed)
+
+    - name: Read whether the public entrance is open
+      ansible.builtin.command: /usr/local/sbin/bibr-public status
+      register: public_state
+      changed_when: false
+      when: nginx_locations.stat.exists
+
+    - name: Open or close the public entrance (bibr_public = {{ bibr_public }})
+      ansible.builtin.command: /usr/local/sbin/bibr-public {{ 'on' if bibr_public | bool else 'off' }}
+      when: >-
+        nginx_locations.stat.exists and (
+          (bibr_public | bool) != ('open' in public_state.stdout)
+          or ((bibr_public | bool) and public_conf.changed))
 
     - name: Free disk space
       ansible.builtin.include_tasks: tasks/cleanup.yml

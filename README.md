@@ -81,6 +81,38 @@ bibr's token.
 A storage volume can be reused by a later workspace: Docker images and model
 files on it are reused, and their ownership is corrected for the new workspace.
 
+## A public bibr
+
+A bibr workspace can also be opened to anyone, without the SRAM login, so people
+can convert papers and get bibr's JSON back. It is the same bibr: metacheck
+workspaces on the private network keep using it as before.
+
+On the bibr workspace (or with `bibr_public = true` when it is created):
+
+```
+sudo bibr-public on       # open:   https://<workspace>/docs and /papers/extract
+sudo bibr-public off      # closed: SRAM login only (/bibr/docs)
+bibr-public status
+```
+
+While open:
+
+- **In a browser:** `https://<workspace>/docs` (bibr's API page): open
+  `POST /papers/extract`, "Try it out", choose a PDF, "Execute"; the JSON appears
+  below and can be downloaded.
+- **From a script:** `curl -F file=@paper.pdf https://<workspace>/papers/extract > paper.json`,
+  or the job routes (`/papers/jobs`) for long papers.
+- nginx adds bibr's token to every request; visitors need none and never see it
+  (the nginx file holding it is readable by root only).
+- At most 6 uploads per minute per visitor (burst 10), answered with HTTP 429
+  beyond that; bibr itself refuses files over 50 MB and work beyond its queue.
+- The progress page and `/bibr/` stay behind the SRAM login.
+
+Before opening it: check SURF Research Cloud's acceptable use policy, and who is
+responsible for what visitors upload. Public use slows down the metacheck app that
+uses the same bibr; a separate public bibr workspace avoids that. Reference
+lookups at Crossref are made with `bibr_crossref_email` as contact address.
+
 ## Component definitions (SRC portal, Development → Components → +)
 
 | Field | bibr | metacheck |
@@ -110,6 +142,7 @@ and `auto` means "decide on the workspace".
 | `bibr_ocr_mem_fraction` | `0.60` | share of GPU memory the OCR server reserves |
 | `bibr_api_key` | `auto` | bibr's bearer token: generated on the workspace, or a fixed one of 32 or more characters |
 | `bibr_listen` | `auto` | `auto` = 127.0.0.1 plus the private network address; `local` = 127.0.0.1 only; or an extra IPv4 address |
+| `bibr_public` | `false` | `true` opens bibr to anyone at the workspace's web address, without the SRAM login (see "A public bibr") |
 | `bibr_docker_root` | `auto` | where Docker keeps its images (about 110 GB) |
 | `bibr_max_upload` | `100M` | largest PDF nginx accepts on `/bibr/` |
 | `bibr_start` | `true` | `false` installs everything but does not build or start the containers |

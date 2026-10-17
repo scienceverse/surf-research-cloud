@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Managed by the bibr SURF Research Cloud component (scienceverse/surf-research-cloud).
+#
+# Opens or closes bibr's public entrance on this workspace's web address.
+#   sudo bibr-public on       anyone can use bibr at https://<workspace>/ (API page: /docs)
+#   sudo bibr-public off      only through the SRAM login (/bibr/) and the private network
+#   bibr-public status        show which it is
+# Workspaces on the private network (metacheck) are not affected either way.
+set -euo pipefail
+
+SRC=/opt/bibr-component/nginx/bibr-public.conf
+DST=/etc/nginx/app-location-conf.d/bibr-public.conf
+ROOT=/etc/nginx/app-location-conf.d/00-root.conf
+HOST=$(hostname -f)
+
+state() { [ -f "$DST" ] && echo open || echo closed; }
+
+# The workspace root goes to the public API page while open, back to the
+# SRAM-protected one when closed; a root that points to metacheck is left alone.
+set_root() {
+  [ -f "$ROOT" ] || return 0
+  grep -q "/metacheck/" "$ROOT" && return 0
+  sed -i "s#return 302 [^;]*;#return 302 $1;#" "$ROOT"
+}
+
+reload() {
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx
+  else
+    nginx -t
+    echo "nginx configuration error: nothing reloaded" >&2
+    exit 1
+  fi
+}
+
+case "${1:-status}" in
+  on)
+    [ "$(id -u)" -eq 0 ] || { echo "Run as: sudo bibr-public on" >&2; exit 1; }
+    [ -d /etc/nginx/app-location-conf.d ] || { echo "No SRC-Nginx on this workspace" >&2; exit 1; }
+    install -m 0600 -o root -g root "$SRC" "$DST"
+    set_root /docs
+    reload
+    echo "bibr is OPEN to anyone: https://$HOST/docs (API: https://$HOST/papers/extract)"
+    ;;
+  off)
+    [ "$(id -u)" -eq 0 ] || { echo "Run as: sudo bibr-public off" >&2; exit 1; }
+    rm -f "$DST"
+    set_root /bibr/docs
+    reload
+    echo "bibr is CLOSED to the public (SRAM login: https://$HOST/bibr/docs)"
+    ;;
+  status)
+    echo "bibr public entrance: $(state)"
+    ;;
+  *)
+    echo "Usage: bibr-public on|off|status" >&2
+    exit 2
+    ;;
+esac
