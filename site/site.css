@@ -125,18 +125,6 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
   font-weight: 700;
 }
 .tool p { margin: 0 0 14px; }
-/* The heading's first letter is a drop capital, as in the introduction; the
-   heading and the paragraph below flow around it, and the file choice that
-   follows starts below it. */
-.tool h2::first-letter {
-  float: left;
-  font-size: 3.3em;
-  line-height: 0.82;
-  font-weight: 400;
-  margin: 0.04em 0.08em 0 0;
-  color: var(--text);
-}
-.tool .drop { clear: left; }
 .note { font-size: 0.88rem; color: var(--muted); }
 
 /* ---- file choice ---- */
