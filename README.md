@@ -35,7 +35,18 @@ All use `Ubuntu 2204 with CUDA` (or `Ubuntu 2204` for a metacheck server without
 GPU). Ubuntu 24.04 is not supported because SRC's `SRC-External` component, which
 every non-SURF component needs, is not available for it.
 
-Access button: `Webinterface (https:)`. Do not open extra ports.
+Further settings of each catalog item:
+
+| Wizard step | Setting | Value | Why |
+|---|---|---|---|
+| 1, components | SRC-External | `SRC-External plugin` (not the Docker or ansible2.11 variants) | runs Ansible playbooks with Ansible 11.1, as tested |
+| 1, components | CUDA | `CUDA`, after SRC-External plugin and before bibr/metacheck | installs the NVIDIA driver and CUDA; the operating system choice "Ubuntu 22.04" has none |
+| 5, cloud provider | operating system / flavours | `Ubuntu 22.04` / `A10 - 1 GPU`, `A10 - 2 GPU` | RTX2080 has too little GPU memory |
+| 6, parameters | `co_passwordless_sudo` (SRC-CO) | `true` | without it, sudo on the workspace asks for a password nobody has |
+| 7, workspace settings | boot disk size | 100 GB | with the default 20 GB the CUDA component alone filled the disk to 98% |
+| 7, workspace settings | access button | `Webinterface (https:)` | |
+
+Do not open extra ports.
 
 ## A bibr server and a metacheck server on a private network
 

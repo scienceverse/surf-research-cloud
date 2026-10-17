@@ -385,6 +385,9 @@
       ansible.builtin.shell: nginx -t && systemctl reload nginx
       when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed)
 
+    - name: Free disk space
+      ansible.builtin.include_tasks: tasks/cleanup.yml
+
     - name: Update status file
       ansible.builtin.lineinfile:
         path: "{{ status_file }}"

@@ -1,0 +1,7 @@
+---
+# Shared last step: remove downloaded package files. SURF's CUDA component
+# leaves about 4 GB of them in /var/cache/apt, which filled a 20 GB boot disk.
+
+- name: Remove downloaded package files
+  ansible.builtin.command: apt-get clean
+  changed_when: false

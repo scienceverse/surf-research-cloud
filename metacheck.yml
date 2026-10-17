@@ -381,6 +381,9 @@
         msg: "SRC-Nginx is not installed: the app is only reachable on the workspace itself (http://127.0.0.1:{{ metacheck_shiny_port }}/metacheck/)."
       when: not nginx_locations.stat.exists
 
+    - name: Free disk space
+      ansible.builtin.include_tasks: tasks/cleanup.yml
+
     - name: Update status file
       ansible.builtin.lineinfile:
         path: "{{ status_file }}"
