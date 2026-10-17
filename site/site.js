@@ -217,6 +217,8 @@ function setupPaperTool(section, kind) {
     const fields = {};
     const crossref = section.querySelector(".use-crossref");
     fields.crossref = crossref && crossref.checked ? "true" : "false";
+    const runCode = section.querySelector(".run-code");
+    if (runCode) fields.run_code = runCode.checked ? "true" : "false";
     if (kind === "report") {
       const mods = [...section.querySelectorAll(".check-list input:checked")].map(i => i.value);
       if (!mods.length) { statusArea(section).error("Choose at least one check."); return; }
@@ -422,10 +424,12 @@ document.getElementById("curl-example").textContent =
 fetch(API + "/health").then(r => r.json()).then(h => {
   if (h.metacheck_version) document.getElementById("version").textContent = "Metacheck version " + h.metacheck_version + ".";
   if (h.run_code === false) {
-    // this server cannot run code: the repository check runs without it
-    const box = document.querySelector("#tool-folder .run-code");
-    box.checked = false;
-    box.disabled = true;
-    document.querySelector("#tool-folder .run-code-note").textContent = "(not available on this server at the moment)";
+    // this server cannot run code: the checks run without it
+    for (const id of ["#tool-folder", "#tool-report"]) {
+      const box = document.querySelector(id + " .run-code");
+      box.checked = false;
+      box.disabled = true;
+      document.querySelector(id + " .run-code-note").textContent = "(not available on this server at the moment)";
+    }
   }
 }).catch(() => {});

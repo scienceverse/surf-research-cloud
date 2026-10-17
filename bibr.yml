@@ -43,10 +43,15 @@
     # SRAM login (nginx adds the token); "false" = SRAM login only. Can be
     # changed later on the workspace with `sudo bibr-public on|off`.
     bibr_public: "false"
+    # "true" = let metacheck workspaces on the SRC private network use this
+    # workspace's language model (through nginx, with bibr's token, see
+    # templates/bibr/bibr-llm-share-nginx.conf.j2), so they need no GPU
+    bibr_share_llm: "true"
 
     # ---- fixed settings ----
     component_label: "bibr component"
     bibr_port: 8000
+    bibr_llm_share_port: 11435
     bibr_dir: /opt/bibr
     bibr_component_dir: /opt/bibr-component
     bibr_secrets_dir: /etc/bibr
@@ -426,9 +431,27 @@
         mode: "0755"
       when: nginx_locations.stat.exists
 
+    - name: Share the language model with metacheck workspaces on the private network
+      ansible.builtin.template:
+        src: templates/bibr/bibr-llm-share-nginx.conf.j2
+        dest: /etc/nginx/conf.d/bibr-llm-share.conf
+        owner: root
+        group: root
+        mode: "0600"
+      when: >-
+        nginx_locations.stat.exists and (bibr_share_llm | bool) and bibr_llm_provider == 'ollama'
+        and bibr_extra_listen.startswith('10.10.10.')
+      no_log: true
+      register: llm_share
+
+    - name: Show where metacheck finds the shared model
+      ansible.builtin.debug:
+        msg: "metacheck workspaces on the private network can use the model {{ bibr_llm_model }} at http://{{ bibr_extra_listen }}:{{ bibr_llm_share_port }}/v1 with bibr's token."
+      when: llm_share is not skipped
+
     - name: Check and reload nginx
       ansible.builtin.shell: nginx -t && systemctl reload nginx
-      when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed or public_limit.changed)
+      when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed or public_limit.changed or (llm_share.changed | default(false)))
 
     - name: Read whether the public entrance is open
       ansible.builtin.command: /usr/local/sbin/bibr-public status

@@ -128,7 +128,9 @@ running <- new.env()          # job id -> callr process
     row <- data.frame(
       date = format(Sys.Date()), event = job$kind,
       reports = as.integer(identical(status, "done") && job$kind != "convert"),
-      modules = if (job$kind == "repocheck") 3L + isTRUE(job$run_code) else length(unlist(job$modules)),
+      modules = if (job$kind == "repocheck") 3L + isTRUE(job$run_code)
+                else length(unique(c(unlist(job$modules),
+                                     if (isTRUE(job$run_code)) c("repo_check", "code_check", "data_check", "reproducibility_check")))),
       status = status, source = job$source %||% "code", visitor = job$visitor %||% "")
     path <- file.path(USAGE_DIR, "api_usage.csv")
     utils::write.table(row, path, sep = ",", row.names = FALSE,
@@ -398,9 +400,12 @@ later::later(.scheduler, 1)
                             name = if (is.null(url)) up$name else url,
                             url = url,
                             crossref = .parse_flag(up$fields$crossref),
-                            # repository check: run the code too (default yes, where the sandbox is on)
-                            run_code = kind == "repocheck" && SANDBOX_ON &&
-                              (is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)),
+                            # run the code in the sandbox: for a repository check by
+                            # default, for a paper (its repository, through the links in
+                            # the paper) only when asked; only where the sandbox is on
+                            run_code = SANDBOX_ON && kind != "convert" &&
+                              (if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
+                               else .parse_flag(up$fields$run_code)),
                             source = if (identical(up$fields$source, "website")) "website" else "code",
                             visitor = .visitor_code(req),
                             report = .parse_flag(up$fields$report)),
@@ -547,7 +552,7 @@ function() {
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
-#* @param run_code for repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health)
+#* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @serializer unboxedJSON
 function(req, res) {
   id <- tryCatch(.submit(req), error = function(e) e)
@@ -583,6 +588,7 @@ function(id, res) {
 #* @param file:file The PDF or bibr JSON
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
+#* @param run_code "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 function(req, res) .one_call(req, res, "report")
 
 #* Run metacheck modules on a PDF or bibr JSON and return the results as JSON, in one call
@@ -592,6 +598,7 @@ function(req, res) .one_call(req, res, "report")
 #* @param file:file The PDF or bibr JSON
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
+#* @param run_code "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @param report "true" to include the HTML report as report_html (optional, default false)
 function(req, res) .one_call(req, res, "check")
 

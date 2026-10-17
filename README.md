@@ -199,6 +199,20 @@ Not run on a workspace that also runs bibr (bibr's containers need other Docker
 settings); `metacheck_run_code = false` switches it off. `GET /api/health` says
 whether this server runs code (`run_code`).
 
+## Running a paper's code
+
+Column 1 of the website (and `run_code=true` with `/api/report`, `/api/check` or
+`/api/jobs`) can also run the code of the repository a paper links to: the chosen
+checks, then `repo_check`, `code_check` and `data_check` on the repositories the
+paper links (fetched as for a link: 100 MB per file, 500 MB per repository), and
+`reproducibility_check`, which runs the R and Python code in the same sandbox and
+compares the statistics it prints with those in the paper. They run as one chain
+(`report_module_run()`), so each check gets the results of the ones before it.
+Off by default; it can take ten minutes or more, mostly for listing OSF projects.
+Tested on two PLOS ONE papers with OSF repositories: their code was fetched and run;
+scripts failed on a package missing from the image (`preregr`) and on values the
+authors had blanked out.
+
 ## Use counts
 
 Every finished job of the web interface (from the website or from code) adds one
@@ -220,6 +234,35 @@ counts (`shiny_app_usage.csv`, metacheck's `usage_record()`) to the same folder.
 sudo metacheck-usage           # per month: jobs per tool, succeeded, website/code, visitors
 sudo metacheck-usage --daily   # per day
 ```
+
+## A metacheck workspace without a GPU
+
+The metacheck workspace needs its GPU only for the small model of the LLM power
+check. bibr's workspace already has that model loaded, so a metacheck workspace on
+the same private network can use it instead and run on a workspace without a GPU,
+which halves the GPU-hours of the pair.
+
+- `bibr.yml` (`bibr_share_llm = true`, the default) adds an nginx entrance on the
+  bibr workspace's private network address, port 11435
+  (`templates/bibr/bibr-llm-share-nginx.conf.j2`). It requires bibr's token and
+  passes on only the two OpenAI-compatible requests metacheck makes
+  (`/v1/chat/completions`, `/v1/models`); everything else, such as downloading or
+  deleting models, gets HTTP 404. Ollama itself still listens only on the
+  workspace.
+- `metacheck.yml` with `metacheck_llm = ollama` (the default) uses a local model
+  when the workspace has a GPU, and otherwise the bibr workspace's model;
+  `metacheck_llm = bibr` always uses the bibr workspace's model. `metacheck_llm_model`
+  must be the model bibr serves (`qwen3.5:4b`). The playbook checks that the model
+  answers.
+
+Tested: with `metacheck_llm = bibr`, the power check of a PLOS ONE paper took 8 s
+and gave the same results as the local model; without the token the entrance
+answers HTTP 401.
+
+For a workspace without a GPU, use a catalog item like "metacheck server" but
+without the CUDA component and with CPU flavours; 8 or more cores and 32 GB or more
+are advisable, since a sandbox container may use 4 cores and 16 GB and two jobs
+can run at once.
 
 ## A public metacheck app
 

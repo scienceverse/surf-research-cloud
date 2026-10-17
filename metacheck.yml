@@ -32,8 +32,13 @@
     metacheck_bibr_url: "auto"
     # bibr's token; needed with an explicit metacheck_bibr_url
     metacheck_bibr_api_key: "none"
-    # "ollama" = local model for the LLM power check when this workspace has
-    # a GPU; "none" = no local model (cloud providers below still possible)
+    # The language model for the LLM power check:
+    # "ollama" = a local model when this workspace has a GPU, otherwise the
+    #   model of the bibr workspace on the private network (bibr.yml,
+    #   bibr_share_llm), so this workspace needs no GPU;
+    # "bibr" = always the bibr workspace's model; "none" = no model (the
+    #   app's cloud providers below are still possible).
+    # metacheck_llm_model must be the model that workspace serves.
     metacheck_llm: "ollama"
     metacheck_llm_model: "qwen3.5:4b"
     metacheck_ollama_context: "16384"
@@ -186,10 +191,32 @@
     - name: Decide on the local model
       ansible.builtin.set_fact:
         metacheck_local_llm: "{{ metacheck_llm == 'ollama' and (has_gpu | bool) }}"
+        # the bibr workspace's model, through its private network address
+        metacheck_shared_llm: >-
+          {{ (metacheck_llm == 'bibr' or (metacheck_llm == 'ollama' and not (has_gpu | bool)))
+             and (metacheck_bibr_remote | bool) and metacheck_bibr_url_value | length > 0 }}
+        metacheck_shared_llm_url: "{{ metacheck_bibr_url_value | regex_replace(':[0-9]+$', '') }}:11435"
 
-    - name: Note that there is no local model
+    - name: Check that the bibr workspace shares its model
+      ansible.builtin.uri:
+        url: "{{ metacheck_shared_llm_url }}/v1/models"
+        headers:
+          Authorization: "Bearer {{ metacheck_bibr_key_value }}"
+        timeout: 15
+      register: shared_llm_probe
+      failed_when: false
+      no_log: true
+      when: metacheck_shared_llm | bool
+
+    - name: Note which model the power check uses
       ansible.builtin.debug:
-        msg: "No local model: {{ 'metacheck_llm is none' if metacheck_llm != 'ollama' else 'this workspace has no GPU' }}. The app's LLM power check can still use a cloud provider."
+        msg: >-
+          {{ ('The power check uses the model of the bibr workspace at ' ~ metacheck_shared_llm_url ~
+              (' (it answers).' if (shared_llm_probe.status | default(0)) == 200
+               else ' but it does not answer yet (HTTP ' ~ (shared_llm_probe.status | default('none')) ~ '): run the bibr playbook with bibr_share_llm = true.'))
+             if metacheck_shared_llm | bool else
+             ('No model: ' ~ ('metacheck_llm is none' if metacheck_llm == 'none' else 'no GPU and no bibr workspace on the private network') ~
+              '. The LLM power check in the app can still use a cloud provider.') }}
       when: not (metacheck_local_llm | bool)
 
     # For model files, and for the web interface's job folders (uploads of up
@@ -362,6 +389,16 @@
         owner: shiny
         group: shiny
         mode: "0700"
+
+    # A reused volume may hold the counts of an earlier workspace, whose shiny
+    # user had another number.
+    - name: Give the shiny user the counts already in that folder
+      ansible.builtin.file:
+        path: "{{ metacheck_usage_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        recurse: true
 
     - name: Write environment for the shiny user (bibr token, LLM keys)
       ansible.builtin.template:
@@ -615,4 +652,4 @@
         msg:
           - "metacheck paper report app: /metacheck/ on the workspace URL (Shiny Server on 127.0.0.1:{{ metacheck_shiny_port }})"
           - "{{ ('PDF conversion: bibr at ' ~ metacheck_bibr_url_value) if metacheck_bibr_url_value | length > 0 else 'PDF conversion: GROBID servers (no bibr configured)' }}"
-          - "{{ ('Local model for the power check: ' ~ metacheck_llm_model ~ ' at ' ~ ollama_url) if metacheck_local_llm | bool else 'No local model' }}"
+          - "{{ ('Local model for the power check: ' ~ metacheck_llm_model ~ ' at ' ~ ollama_url) if metacheck_local_llm | bool else (('Model for the power check: ' ~ metacheck_llm_model ~ ' on the bibr workspace, ' ~ metacheck_shared_llm_url) if metacheck_shared_llm | bool else 'No model for the power check') }}"

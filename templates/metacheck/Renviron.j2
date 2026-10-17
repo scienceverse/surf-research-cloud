@@ -13,6 +13,14 @@ BIBR_REMOTE={{ 'true' if metacheck_bibr_remote else 'false' }}
 # Local language model (Ollama on this workspace) for the LLM power check.
 OLLAMA_BASE_URL={{ ollama_url }}
 METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+{% elif metacheck_shared_llm | bool %}
+
+# The bibr workspace's language model, on the SRC private network, for the LLM
+# power check (shared through nginx there, with bibr's token).
+OLLAMA_BASE_URL={{ metacheck_shared_llm_url }}
+VLLM_API_KEY={{ metacheck_bibr_key_value }}
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+METACHECK_LLM_SHARED=true
 {% endif %}
 
 # Anonymous use counts of the app (metacheck's usage_record()) and of the web

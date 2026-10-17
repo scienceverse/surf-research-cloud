@@ -423,7 +423,8 @@ LLM_DEFAULT_PROVIDER <- "mistral"
 if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
   LLM_PROVIDERS <- c(list(local = list(
-    label    = "This server (local model)",
+    label    = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true"))
+      "The bibr server's model (SURF private network)" else "This server (local model)",
     # Through metacheck's OpenAI-compatible ("vllm") route to Ollama's /v1
     # address: only that route switches off Qwen's reasoning step for
     # structured calls. Via "ollama/..." every power extraction ran out of
@@ -432,7 +433,10 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     key_env  = "OLLAMA_BASE_URL",
     keys_url = "",
     region   = "local",
-    privacy  = paste0(
+    privacy  = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true")) paste0(
+      "The model runs on the bibr server in the same SURF project, reached over ",
+      "SURF's private network, so the paragraphs are not sent to an external provider."
+    ) else paste0(
       "The model runs on this server, so the paragraphs are not sent to an ",
       "external provider."
     )

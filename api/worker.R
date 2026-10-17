@@ -145,6 +145,38 @@ do_repocheck <- function(job_dir, job) {
               result_type = "text/html; charset=utf-8")
 }
 
+# A paper with "run the code" ticked: the chosen modules, then the paper's
+# repository through the links in the paper (repo_check, code_check,
+# data_check) and metacheck's reproducibility check, which runs the code in the
+# Docker sandbox (as for a repository check) and compares the statistics it
+# prints with those in the paper. Run as one chain (report_module_run), so
+# each module gets the results of the ones before it; progress through
+# metacheck's progress code, as in the repository check.
+.run_paper_code <- function(paper, modules, job_dir) {
+  rc <- .repocheck_env()
+  chain <- c("repo_check", "code_check", "data_check", "reproducibility_check")
+  modules <- c(setdiff(modules, chain), chain)
+  fetch <- rc$download_args
+  args <- list(
+    code_check = fetch, data_check = fetch,
+    reproducibility_check = c(list(
+      execute = TRUE, sandbox = "docker", install_missing = FALSE,
+      docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
+  progress <- file.path(job_dir, "progress.txt")
+  on.exit(unlink(c(progress, file.path(job_dir, "cache")), recursive = TRUE), add = TRUE)
+  options(shiny_progress_file = progress,
+          metacheck.repo_cache.dir = file.path(job_dir, "cache"),
+          metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+  Sys.umask("000")   # see do_repocheck(): the sandbox's user writes into these folders
+  labels <- vapply(modules, function(m) {
+    tryCatch(metacheck::module_info(m)$title, error = function(e) m) %||% m
+  }, character(1))
+  labels["reproducibility_check"] <- "Running the code of the paper's repository in the sandbox"
+  rc$use_shiny_progress()
+  rc$shiny_progress_modules(stats::setNames(labels, modules), from = 0.1, to = 0.9)
+  metacheck::report_module_run(paper, modules, args)
+}
+
 do_job <- function(job_dir) {
   job <- jsonlite::read_json(file.path(job_dir, "job.json"), simplifyVector = TRUE)
   input <- file.path(job_dir, job$input_file)
@@ -190,6 +222,10 @@ do_job <- function(job_dir) {
     # 3. the modules, one by one, with progress
     modules <- unlist(job$modules)
     full <- list()
+    if (isTRUE(job$run_code)) {
+      full <- .run_paper_code(paper, modules, job_dir)
+      modules <- character(0)          # all ran in the chain above
+    }
     for (i in seq_along(modules)) {
       m <- modules[[i]]
       .set_status(job_dir, step = sprintf("running module %d of %d: %s", i, length(modules), m))
