@@ -38,6 +38,13 @@ MAX_WORKERS <- as.integer(Sys.getenv("METACHECK_API_WORKERS", "2"))
 MAX_WAITING <- 20L                  # queued jobs; more are refused (HTTP 503)
 RESULT_KEEP_MINUTES <- as.numeric(Sys.getenv("METACHECK_API_KEEP_MINUTES", "60"))
 JOB_TIMEOUT_MINUTES <- 30
+# Running a repository's code (metacheck's reproducibility check) in the
+# Docker sandbox set up by the playbook (tasks/sandbox.yml): only when the
+# playbook found everything in place (METACHECK_SANDBOX=on).
+SANDBOX_ON <- identical(Sys.getenv("METACHECK_SANDBOX"), "on")
+SANDBOX_ROOT <- "/srv/metacheck-sandbox"
+SANDBOX_BIN <- Sys.getenv("METACHECK_SANDBOX_BIN", "/opt/metacheck-component/sandbox-bin")
+SANDBOX_TIMEOUT_MINUTES <- 60       # a job that runs code may take longer
 MAX_UPLOAD_BYTES <- 50 * 1024^2     # PDF or bibr JSON
 MAX_ZIP_BYTES <- 500 * 1024^2       # .zip of a data/code folder (as metacheck's repocheck app)
 MIN_FREE_DISK_MB <- 10000           # refuse new jobs when less is free (as the repocheck app)
@@ -120,7 +127,7 @@ running <- new.env()          # job id -> callr process
     row <- data.frame(
       date = format(Sys.Date()), event = job$kind,
       reports = as.integer(identical(status, "done") && job$kind != "convert"),
-      modules = if (job$kind == "repocheck") 3L else length(unlist(job$modules)),
+      modules = if (job$kind == "repocheck") 3L + isTRUE(job$run_code) else length(unlist(job$modules)),
       status = status, source = job$source %||% "code", visitor = job$visitor %||% "")
     path <- file.path(USAGE_DIR, "api_usage.csv")
     utils::write.table(row, path, sep = ",", row.names = FALSE,
@@ -137,6 +144,17 @@ running <- new.env()          # job id -> callr process
   st <- .read_status(id)
   st$status <- "running"; st$step <- "starting"; st$started <- .now()
   .write_status(id, st)
+  job <- .read_job(id)
+  env <- callr::rcmd_safe_env()
+  if (isTRUE(job$run_code)) {
+    # The job's own folder on the sandbox file system holds everything the
+    # code can see and write (R's temporary folder, so metacheck's sandbox
+    # folders, are made there), and its `docker` is the guard's command.
+    tmp <- file.path(SANDBOX_ROOT, id, "tmp")
+    dir.create(tmp, recursive = TRUE, mode = "0700")
+    env <- c(env, TMPDIR = tmp, METACHECK_JOB_ID = id,
+             PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":"))
+  }
   running[[id]] <- callr::r_bg(
     function(api_dir, job_dir) {
       setwd(api_dir)
@@ -146,8 +164,26 @@ running <- new.env()          # job id -> callr process
     args = list(api_dir = API_DIR, job_dir = .job_dir(id)),
     stdout = file.path(.job_dir(id), "worker.log"),
     stderr = "2>&1",
+    env = env,
     supervise = TRUE
   )
+}
+
+# Stops a job's sandbox containers and deletes its sandbox folder (as root,
+# through the guard, since the code's files belong to the sandbox's user).
+.sandbox_cleanup <- function(id) {
+  if (dir.exists(file.path(SANDBOX_ROOT, id))) {
+    system2("sudo", c("-n", "/usr/local/sbin/metacheck-sandbox", "cleanup", id),
+            stdout = FALSE, stderr = FALSE, wait = FALSE)
+  }
+}
+
+.job_timeout <- function(id) {
+  if (isTRUE(.read_job(id)$run_code)) SANDBOX_TIMEOUT_MINUTES else JOB_TIMEOUT_MINUTES
+}
+
+.read_job <- function(id) {
+  tryCatch(jsonlite::read_json(file.path(.job_dir(id), "job.json")), error = function(e) list())
 }
 
 .scheduler <- function() {
@@ -164,16 +200,19 @@ running <- new.env()          # job id -> callr process
           .write_status(id, st)
         }
         .usage_record(id, st$status)
+        .sandbox_cleanup(id)
         unlink(file.path(.job_dir(id), "worker.log"))
       } else {
         started <- as.POSIXct(.read_status(id)$started %||% .now(), format = "%Y-%m-%dT%H:%M:%S%z")
-        if (difftime(Sys.time(), started, units = "mins") > JOB_TIMEOUT_MINUTES) {
+        limit <- .job_timeout(id)
+        if (difftime(Sys.time(), started, units = "mins") > limit) {
           p$kill()
+          .sandbox_cleanup(id)
           rm(list = id, envir = running)
           unlink(list.files(.job_dir(id), pattern = "^input\\.", full.names = TRUE))
           st <- .read_status(id)
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
-          st$error <- sprintf("The job took longer than %d minutes and was stopped.", JOB_TIMEOUT_MINUTES)
+          st$error <- sprintf("The job took longer than %d minutes and was stopped.", limit)
           .write_status(id, st)
           .usage_record(id, "failed")
         }
@@ -206,6 +245,7 @@ for (id in list.dirs(JOBS_DIR, full.names = FALSE, recursive = FALSE)) {
     st$error <- "The service restarted while the job was running."
     .write_status(id, st)
     unlink(list.files(.job_dir(id), pattern = "^input\\.", full.names = TRUE))
+    .sandbox_cleanup(id)
   }
 }
 later::later(.scheduler, 1)
@@ -307,6 +347,9 @@ later::later(.scheduler, 1)
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
                             name = up$name,
                             crossref = .parse_flag(up$fields$crossref),
+                            # repository check: run the code too (default yes, where the sandbox is on)
+                            run_code = kind == "repocheck" && SANDBOX_ON &&
+                              (is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)),
                             source = if (identical(up$fields$source, "website")) "website" else "code",
                             visitor = .visitor_code(req),
                             report = .parse_flag(up$fields$report)),
@@ -343,6 +386,7 @@ later::later(.scheduler, 1)
     step = st$step,
     position = if (identical(st$status, "queued")) .position(id) else NULL,
     progress = progress,
+    run_code = if (isTRUE(.read_job(id)$run_code)) TRUE else NULL,
     created = st$created, started = st$started, finished = st$finished,
     error = st$error,
     status_url = paste0(base, "/jobs/", id),
@@ -420,6 +464,7 @@ function() {
   list(status = "ok", bibr = .bibr_ready_cached(),
        metacheck_version = as.character(utils::packageVersion("metacheck")),
        jobs_running = length(ls(running)), jobs_waiting = length(.queued_ids()),
+       run_code = SANDBOX_ON,
        workers = MAX_WORKERS)
 }
 
@@ -450,6 +495,7 @@ function() {
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
+#* @param run_code for repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health)
 #* @serializer unboxedJSON
 function(req, res) {
   id <- tryCatch(.submit(req), error = function(e) e)
@@ -505,9 +551,10 @@ function(req, res) .one_call(req, res, "check")
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 function(req, res) .one_call(req, res, "convert")
 
-#* Check a data and code folder (.zip, at most 500 MB) with repo_check, code_check and data_check, in one call; returns the HTML report
+#* Check a data and code folder (.zip, at most 500 MB) with repo_check, code_check and data_check, and run its R and Python code in a sandbox (reproducibility_check), in one call; returns the HTML report
 #* @post /repocheck
 #* @parser multi
 #* @parser octet
 #* @param file:file The .zip of the folder
+#* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health)
 function(req, res) .one_call(req, res, "repocheck")

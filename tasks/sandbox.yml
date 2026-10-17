@@ -1,0 +1,236 @@
+---
+# The sandbox in which the repository check runs a paper's R and Python code
+# (metacheck's reproducibility_check(execute = TRUE, sandbox = "docker")).
+#
+# Layers of protection, from outside in:
+#   1. The shiny user (web interface, app) cannot use Docker itself. Its jobs
+#      call /usr/local/sbin/metacheck-sandbox through one sudo rule; that
+#      program lets through only metacheck's locked-down `docker run` (no
+#      network, read-only system, no capabilities, limited processes,
+#      processors, memory and file sizes, only the job's own folder writable,
+#      only the allowed images, Rscript or python only) and refuses the rest.
+#   2. Docker runs with user remapping (userns-remap): the container's users,
+#      root included, are unused numbers on the host, never a host account.
+#      No new privileges, no communication between containers, no image
+#      downloads at run time (--pull never).
+#   3. The job's files live on their own size-limited file system
+#      (/srv/metacheck-sandbox, a loop device), mounted nodev, nosuid and
+#      noexec, so a script that fills it cannot fill anything else.
+#   4. A timer stops any sandbox container running longer than 45 minutes and
+#      deletes leftover sandbox folders.
+# Packages are never installed at run time (install_missing = FALSE): code runs
+# with the packages in the images, so the network stays closed throughout.
+#
+# Expects: large_disk (tasks/large_disk.yml), metacheck_component_dir,
+# metacheck_sandbox_size, metacheck_sandbox_images.
+
+- name: Docker apt key and repository
+  block:
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable"
+        filename: docker
+        state: present
+
+- name: Install Docker
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+    state: present
+    update_cache: true
+  register: sandbox_docker_pkgs
+
+- name: Choose where Docker keeps the images
+  ansible.builtin.set_fact:
+    sandbox_docker_root: "{{ (large_disk ~ '/sandbox-docker') if large_disk is match('/data/') else '/var/lib/docker' }}"
+
+- name: Configure Docker for the sandbox
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "data-root": "{{ sandbox_docker_root }}",
+        "features": {"containerd-snapshotter": false},
+        "userns-remap": "default",
+        "no-new-privileges": true,
+        "icc": false,
+        "live-restore": true,
+        "log-driver": "local",
+        "log-opts": {"max-size": "10m", "max-file": "2"}
+      }
+  register: sandbox_daemon_json
+
+- name: Create Docker's systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: "0755"
+
+- name: Make Docker wait for its disk at boot
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/metacheck-data-root.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor={{ sandbox_docker_root }}
+  register: sandbox_docker_dropin
+
+- name: Enable and (re)start Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if (sandbox_docker_pkgs.changed or sandbox_daemon_json.changed or sandbox_docker_dropin.changed) else 'started' }}"
+
+# ---- the size-limited sandbox file system -------------------------------------
+
+- name: Choose where the sandbox file system is kept
+  ansible.builtin.set_fact:
+    sandbox_image_file: "{{ (large_disk ~ '/metacheck-sandbox.img') if large_disk is match('/data/') else '/var/lib/metacheck-sandbox.img' }}"
+
+- name: Create the sandbox file system
+  ansible.builtin.shell: |
+    set -e
+    if [ ! -f "{{ sandbox_image_file }}" ]; then
+      truncate -s {{ metacheck_sandbox_size }} "{{ sandbox_image_file }}"
+      chmod 600 "{{ sandbox_image_file }}"
+      mkfs.ext4 -q -F -m 0 -L mcsandbox "{{ sandbox_image_file }}"
+      echo changed
+    fi
+  register: sandbox_fs
+  changed_when: "'changed' in sandbox_fs.stdout"
+
+- name: Mount the sandbox file system (nodev, nosuid, noexec)
+  ansible.posix.mount:
+    path: /srv/metacheck-sandbox
+    src: "{{ sandbox_image_file }}"
+    fstype: ext4
+    opts: loop,nodev,nosuid,noexec
+    state: mounted
+
+- name: Give the sandbox file system to the shiny user
+  ansible.builtin.file:
+    path: /srv/metacheck-sandbox
+    state: directory
+    owner: shiny
+    group: shiny
+    mode: "0700"
+
+# ---- the guard ----------------------------------------------------------------
+
+- name: Install the sandbox guard
+  ansible.builtin.copy:
+    src: files/metacheck/metacheck-sandbox
+    dest: /usr/local/sbin/metacheck-sandbox
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Let the shiny user call the guard, and nothing else, as root
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/metacheck-sandbox
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      # Managed by the metacheck SURF Research Cloud component.
+      # The web interface's jobs reach Docker only through this guard.
+      Defaults:shiny !requiretty
+      shiny ALL=(root) NOPASSWD: /usr/local/sbin/metacheck-sandbox
+    validate: visudo -cf %s
+
+- name: Create the folder of the jobs' docker command
+  ansible.builtin.file:
+    path: "{{ metacheck_component_dir }}/sandbox-bin"
+    state: directory
+    mode: "0755"
+
+# Jobs put this folder first on their PATH, so metacheck's `docker` calls go
+# to the guard (with the job's id, which the guard checks).
+- name: Install the jobs' docker command
+  ansible.builtin.copy:
+    dest: "{{ metacheck_component_dir }}/sandbox-bin/docker"
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # Managed by the metacheck SURF Research Cloud component.
+      exec sudo -n /usr/local/sbin/metacheck-sandbox --job "${METACHECK_JOB_ID:-none}" docker "$@"
+
+- name: Install the timer that stops overdue sandbox containers
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: metacheck-sandbox-reap.service
+      content: |
+        [Unit]
+        Description=Stop overdue metacheck sandbox containers, delete leftover sandbox folders
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/metacheck-sandbox reap
+    - name: metacheck-sandbox-reap.timer
+      content: |
+        [Unit]
+        Description=Every 5 minutes: stop overdue metacheck sandbox containers
+        [Timer]
+        OnBootSec=5min
+        OnUnitActiveSec=5min
+        [Install]
+        WantedBy=timers.target
+  register: sandbox_timer
+
+- name: Enable the timer
+  ansible.builtin.systemd:
+    name: metacheck-sandbox-reap.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ sandbox_timer.changed }}"
+
+# ---- the images ---------------------------------------------------------------
+
+- name: Download the sandbox images (several GB each)
+  ansible.builtin.command: docker pull -q {{ item }}
+  loop: "{{ metacheck_sandbox_images }}"
+  register: sandbox_pull
+  changed_when: false
+  failed_when: false
+  retries: 2
+  delay: 30
+  until: sandbox_pull.rc == 0
+
+- name: Check which images are present
+  ansible.builtin.command: docker image inspect --format ok {{ item }}
+  loop: "{{ metacheck_sandbox_images }}"
+  register: sandbox_images_present
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether code can be run
+  ansible.builtin.set_fact:
+    metacheck_sandbox_ready: "{{ sandbox_images_present.results | selectattr('rc', 'equalto', 0) | list | length == metacheck_sandbox_images | length }}"
+
+- name: Note missing images
+  ansible.builtin.debug:
+    msg: >-
+      Not all sandbox images could be downloaded ({{ sandbox_images_present.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | join(', ') }}).
+      The repository check works, but does not run code until they are present
+      (docker pull, or build them from github.com/scienceverse/metacheck_docker_reproducibility
+      with these names) and this playbook runs again.
+  when: not (metacheck_sandbox_ready | bool)

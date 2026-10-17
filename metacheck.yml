@@ -46,6 +46,16 @@
 
     # ---- fixed settings ----
     component_label: "metacheck component"
+    # Run the R and Python code of uploaded repositories (metacheck's
+    # reproducibility check) in a locked-down Docker sandbox (tasks/sandbox.yml).
+    # Skipped when bibr runs on the same workspace (its containers need other
+    # Docker settings).
+    metacheck_run_code: "true"
+    metacheck_sandbox_size: "60G"
+    metacheck_sandbox_images:
+      - ghcr.io/scienceverse/metacheck_r_large:latest
+      - ghcr.io/scienceverse/metacheck_py_large:latest
+
     metacheck_shiny_port: 3838
     metacheck_api_port: 2005
     metacheck_component_dir: /opt/metacheck-component
@@ -368,6 +378,27 @@
         name: shiny-server
         enabled: true
         state: "{{ 'restarted' if (shiny_pkg.changed or metacheck_install.changed or shiny_app_copy.changed or shiny_conf.changed or shiny_env.changed) else 'started' }}"
+
+    # ------------------------------------------------------------------
+    # Sandbox for running the code of uploaded repositories
+    # ------------------------------------------------------------------
+    - name: Check whether bibr runs on this workspace
+      ansible.builtin.stat:
+        path: /opt/bibr
+      register: sandbox_bibr_here
+
+    - name: Note that code will not be run
+      ansible.builtin.debug:
+        msg: "Code of uploaded repositories will not be run: {{ 'metacheck_run_code is false' if not (metacheck_run_code | bool) else 'bibr uses Docker on this workspace with other settings' }}."
+      when: not (metacheck_run_code | bool) or sandbox_bibr_here.stat.exists
+
+    - name: Set up the sandbox
+      ansible.builtin.include_tasks: tasks/sandbox.yml
+      when: metacheck_run_code | bool and not sandbox_bibr_here.stat.exists
+
+    - name: Remember whether code can be run
+      ansible.builtin.set_fact:
+        metacheck_sandbox_on: "{{ (metacheck_run_code | bool) and not sandbox_bibr_here.stat.exists and (metacheck_sandbox_ready | default(false) | bool) }}"
 
     # ------------------------------------------------------------------
     # Web interface (api/): PDF or bibr JSON in, report out

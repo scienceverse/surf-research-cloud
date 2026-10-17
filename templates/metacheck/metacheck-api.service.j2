@@ -5,6 +5,10 @@
 Description=metacheck web interface (PDF or bibr JSON in, report out)
 After=network-online.target shiny-server.service
 Wants=network-online.target
+{% if metacheck_sandbox_on | bool %}
+After=docker.service
+RequiresMountsFor=/srv/metacheck-sandbox
+{% endif %}
 
 [Service]
 User=shiny
@@ -12,6 +16,9 @@ Group=shiny
 Environment=HOME=/home/shiny
 Environment=METACHECK_API_JOBS={{ metacheck_api_jobs_dir }}
 Environment=METACHECK_USAGE_DIR={{ metacheck_usage_dir }}
+# Whether uploaded repositories' code may be run in the sandbox (tasks/sandbox.yml)
+Environment=METACHECK_SANDBOX={{ 'on' if (metacheck_sandbox_on | bool) else 'off' }}
+Environment=METACHECK_SANDBOX_BIN={{ metacheck_component_dir }}/sandbox-bin
 WorkingDirectory={{ metacheck_component_dir }}/api
 ExecStart=/usr/bin/Rscript -e 'plumber::pr_run(plumber::plumb("api.R"), host = "127.0.0.1", port = {{ metacheck_api_port }}, docs = TRUE)'
 Restart=always

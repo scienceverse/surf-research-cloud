@@ -100,10 +100,30 @@ do_repocheck <- function(job_dir, job) {
     # the job's step.
     options(shiny_progress_file = file.path(job_dir, "progress.txt"),
             metacheck.repo_cache.dir = file.path(job_dir, "cache"))
+    modules <- rc$MODULES
+    labels <- rc$MODULE_LABELS[rc$MODULES]
+    args <- list(repo_check = list(local_path = repo_dir, local_only = TRUE))
+    if (isTRUE(job$run_code)) {
+      # metacheck's reproducibility check, running the code: always in the
+      # Docker sandbox (api.R gave this process the guard's `docker` and a
+      # temporary folder on the sandbox file system), never installing
+      # packages (so the network stays closed), at most 5 minutes per script.
+      modules <- c(modules, "reproducibility_check")
+      labels <- c(labels, reproducibility_check = "Running the R and Python code in the sandbox")
+      args$reproducibility_check <- list(
+        execute = TRUE, sandbox = "docker", install_missing = FALSE,
+        docker_use_declared_version = FALSE, timeout = 300,
+        local_path = repo_dir, local_only = TRUE)
+      options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+      # The sandbox's user (an unused id on this server) must be able to write
+      # into the folders metacheck makes for it; they lie inside this job's
+      # own folder on the sandbox file system, which only this server's
+      # shiny user and root can reach.
+      Sys.umask("000")
+    }
     rc$use_shiny_progress()
-    rc$shiny_progress_modules(rc$MODULE_LABELS[rc$MODULES], from = 0.1, to = 0.9)
-    rc$render_brief_report(paper, rc$MODULES, file.path(job_dir, "result.html"),
-                           args = list(repo_check = list(local_path = repo_dir, local_only = TRUE)))
+    rc$shiny_progress_modules(labels, from = 0.1, to = 0.9)
+    rc$render_brief_report(paper, modules, file.path(job_dir, "result.html"), args = args)
   }, error = function(e) stop(rc$explain_error(conditionMessage(e)), call. = FALSE))
   unlink(file.path(job_dir, "progress.txt"))
   .set_status(job_dir, status = "done", step = "done", finished = .now(),

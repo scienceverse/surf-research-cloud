@@ -383,7 +383,7 @@ function setupFolderTool(section) {
         throw new Error("The packed folder is " + sizeText(blob.size) + "; the limit is 500 MB. Leave out large data or output files that do not need checking.");
       }
       return { file: blob, filename: c.name + ".zip", name: c.name };
-    }, "repocheck", {});
+    }, "repocheck", { run_code: section.querySelector(".run-code").checked ? "true" : "false" });
   });
 }
 
@@ -399,4 +399,11 @@ document.getElementById("curl-example").textContent =
 
 fetch(API + "/health").then(r => r.json()).then(h => {
   if (h.metacheck_version) document.getElementById("version").textContent = "Metacheck version " + h.metacheck_version + ".";
+  if (h.run_code === false) {
+    // this server cannot run code: the repository check runs without it
+    const box = document.querySelector("#tool-folder .run-code");
+    box.checked = false;
+    box.disabled = true;
+    document.querySelector("#tool-folder .run-code-note").textContent = "(not available on this server at the moment)";
+  }
 }).catch(() => {});

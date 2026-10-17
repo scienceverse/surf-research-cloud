@@ -148,6 +148,56 @@ same time, a chosen .zip, a wrong file, the list of checks, and the layout at 37
 500 and 1400 pixels wide. Not tested: dropping a folder onto the page (the
 browser's drag and drop cannot be scripted with real folders).
 
+## Running a repository's code
+
+The repository check (`/api/repocheck`, column 2 of the website) also runs the
+uploaded R and Python code with metacheck's reproducibility check
+(`reproducibility_check(execute = TRUE, sandbox = "docker")`), unless the request
+says `run_code=false` or the box on the website is unticked. The report then shows,
+per script, whether it ran, failed or ran out of time, with its output. Each
+script may run 5 minutes, a job 60 minutes. Packages are never installed at run
+time (`install_missing = FALSE`): the code runs with what the images contain.
+
+Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
+(~750 R packages, JAGS, a JDK, the geospatial stack) and
+`ghcr.io/scienceverse/metacheck_py_large` (the common data-science stack plus
+~70 packages and CPU-only torch and tensorflow). metacheck asks for the small
+Python image; the guard (below) serves the large one instead. The playbook
+downloads both; when it cannot (they need a GitHub login while they are not
+public), it says so and code is not run until they are present, for example built
+on the workspace from
+[metacheck_docker_reproducibility](https://github.com/scienceverse/metacheck_docker_reproducibility)
+under the same names (the large R image takes hours to build).
+
+How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-sandbox`):
+
+1. **No direct Docker access.** The shiny user, which runs the public website,
+   web interface and app, is not in the docker group (that would make it equal to
+   root). A job finds a `docker` command that calls `/usr/local/sbin/metacheck-sandbox`
+   through one sudo rule. That guard accepts only `docker info`, `docker stop` of
+   the job's own containers, and `docker run` exactly as metacheck builds it; it
+   refuses every other option, image, mount or command, rebuilds the command from
+   the checked parts and logs every decision (`journalctl -t metacheck-sandbox`).
+2. **Locked-down containers.** No network (`--network none`; no images are
+   downloaded at run time either), a read-only system, all capabilities dropped,
+   no new privileges, a non-root user, at most 512 processes, 4 processors, 16 GB
+   memory without swap, files of at most 10 GB, and a `/tmp` without program
+   execution. The only writable mount is the job's own sandbox folder.
+3. **User remapping.** Docker runs with `userns-remap`: users inside a container,
+   root included, are unused numbers on the host, never a host account. AppArmor
+   and seccomp profiles are on, containers cannot reach each other.
+4. **A separate, size-limited disk.** Each job's sandbox folder lies on its own
+   60 GB file system (`/srv/metacheck-sandbox`, a file on the volume mounted as a
+   disk), mounted without device files, privilege changes or program execution,
+   so code that fills it cannot fill anything else.
+5. **Cleanup.** A job's containers are stopped and its sandbox folder deleted
+   when the job ends or is stopped; a timer stops any sandbox container after 45
+   minutes and deletes leftover folders.
+
+Not run on a workspace that also runs bibr (bibr's containers need other Docker
+settings); `metacheck_run_code = false` switches it off. `GET /api/health` says
+whether this server runs code (`run_code`).
+
 ## Use counts
 
 Every finished job of the web interface (from the website or from code) adds one
