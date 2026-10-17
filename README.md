@@ -131,6 +131,84 @@ fallback transport) are limited to 20 per minute per visitor, burst 40; the app
 itself runs at most 4 reports at once and makes each session wait between reports.
 The progress page always requires the SRAM login.
 
+## The web interface: a report from any programming language
+
+The metacheck component also runs a small web interface (`api/api.R`, plumber,
+service `metacheck-api`) at `https://<workspace>/api/`. Send a paper, get the
+report back. It follows the same switch as the app: open to anyone while
+`metacheck-public on`, behind the SRAM login otherwise.
+
+| Request | Send (form field `file`) | Get |
+|---|---|---|
+| `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
+| `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
+| `POST /api/convert` | PDF | bibr's JSON |
+| `GET /api/modules` | | the modules that may be requested, and the default set |
+| `GET /api/health` | | status, whether bibr answers, metacheck version |
+| `/api/__docs__/` | | interactive documentation in the browser |
+
+PDFs are converted by the bibr the component is connected to (bibr itself stays
+closed). Only the modules the app offers can be requested; the default is a quick
+set that needs no other online service (`power`, `marginal`, `ethics_check`,
+`stat_check`, `stat_p_exact`, `stat_p_nonsig`, `stat_effect_size`). Requests are
+handled one at a time: further ones wait. A new 16-page paper took 63 s from
+upload to report; a paper bibr has seen before about 10 s. While public: 6 uploads
+per minute per visitor (burst 6), HTTP 429 beyond that. Papers are not stored.
+
+Examples (all tested; replace the address with your workspace's):
+
+```
+curl -F file=@paper.pdf https://<workspace>/api/report -o report.html
+curl -F file=@paper.pdf -F modules=power,stat_check https://<workspace>/api/check
+curl -F file=@paper.pdf https://<workspace>/api/convert -o paper.json
+```
+
+```r
+library(httr2)
+api <- "https://<workspace>/api"
+request(paste0(api, "/report")) |>
+  req_body_multipart(file = curl::form_file("paper.pdf")) |>
+  req_timeout(1800) |>
+  req_perform(path = "report.html")
+
+res <- request(paste0(api, "/check")) |>
+  req_body_multipart(file = curl::form_file("paper.pdf"), modules = "power,stat_check") |>
+  req_timeout(1800) |> req_perform() |> resp_body_json()
+```
+
+```python
+import requests
+api = "https://<workspace>/api"
+with open("paper.pdf", "rb") as f:
+    r = requests.post(f"{api}/report", files={"file": f}, timeout=1800)
+open("report.html", "wb").write(r.content)
+```
+
+```powershell
+# Windows PowerShell 5.1 and PowerShell 7
+Add-Type -AssemblyName System.Net.Http
+$client = New-Object System.Net.Http.HttpClient
+$client.Timeout = [TimeSpan]::FromMinutes(30)
+$form = New-Object System.Net.Http.MultipartFormDataContent
+$file = New-Object System.Net.Http.ByteArrayContent(,[System.IO.File]::ReadAllBytes("C:\papers\paper.pdf"))
+$file.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/pdf")
+$disp = New-Object System.Net.Http.Headers.ContentDispositionHeaderValue("form-data")
+$disp.Name = '"file"'; $disp.FileName = '"paper.pdf"'
+$file.Headers.ContentDisposition = $disp
+$form.Add($file)
+$r = $client.PostAsync("https://<workspace>/api/report", $form).Result
+[System.IO.File]::WriteAllBytes("C:\papers\report.html", $r.Content.ReadAsByteArrayAsync().Result)
+```
+
+(Windows also has `curl.exe`, which takes the curl lines above unchanged.)
+
+The interface reuses metacheck's own API helper code (`inst/plumber/utils`, fetched
+from the same metacheck version, since it is not part of the installed package)
+for running modules and rendering the report. It reads uploads with `webutils`
+rather than metacheck's `mime`-based helper, because `mime` does not find the file
+when its `Content-Type` line comes before its `Content-Disposition` line, which is
+how .NET and PowerShell send it.
+
 ## Component definitions (SRC portal, Development → Components → +)
 
 | Field | bibr | metacheck |
@@ -177,7 +255,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_ollama_context` | `16384` | Ollama's context window in tokens |
 | `metacheck_mistral_api_key`, `metacheck_groq_api_key` | `none` | keys for the app's cloud model providers (optional) |
 | `metacheck_max_upload` | `100M` | largest PDF nginx accepts |
-| `metacheck_public` | `false` | `true` opens the app to anyone, without the SRAM login (see "A public metacheck app") |
+| `metacheck_public` | `false` | `true` opens the app and the web interface to anyone, without the SRAM login (see "A public metacheck app") |
 
 Secrets are generated on the workspace (`/etc/bibr/`, root only); nothing secret is
 kept in this repository or in SRC.

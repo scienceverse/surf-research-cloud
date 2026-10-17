@@ -47,6 +47,7 @@
     # ---- fixed settings ----
     component_label: "metacheck component"
     metacheck_shiny_port: 3838
+    metacheck_api_port: 2005
     metacheck_component_dir: /opt/metacheck-component
     metacheck_log_dir: /var/log/metacheck
     status_dir: /var/log/metacheck
@@ -100,6 +101,13 @@
       - r-cran-rsqlite
       - r-cran-zip
       - r-cran-digest
+      # the web interface (api/): plumber and what metacheck's API helpers use
+      - r-cran-plumber
+      - r-cran-logger
+      - r-cran-uuid
+      - r-cran-mime
+      - r-cran-webutils
+      - r-cran-swagger
 
 
   tasks:
@@ -344,6 +352,70 @@
         name: shiny-server
         enabled: true
         state: "{{ 'restarted' if (shiny_pkg.changed or metacheck_install.changed or shiny_app_copy.changed or shiny_conf.changed or shiny_env.changed) else 'started' }}"
+
+    # ------------------------------------------------------------------
+    # Web interface (api/): PDF or bibr JSON in, report out
+    # ------------------------------------------------------------------
+    - name: Create the web interface folder
+      ansible.builtin.file:
+        path: "{{ metacheck_component_dir }}/api/metacheck-plumber"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # metacheck's API helper code (inst/plumber/utils) is not part of the
+    # installed package (.Rbuildignore), so it is taken from the same
+    # repository and branch metacheck was installed from.
+    - name: Fetch metacheck's API helper code
+      ansible.builtin.shell: |
+        set -e
+        tmp=$(mktemp -d)
+        git clone -q --depth 1 --filter=blob:none --sparse -b {{ metacheck_ref }} https://github.com/{{ metacheck_repo }}.git "$tmp/mc"
+        git -C "$tmp/mc" sparse-checkout set inst/plumber/utils
+        dest={{ metacheck_component_dir }}/api/metacheck-plumber/utils
+        if ! diff -rq "$tmp/mc/inst/plumber/utils" "$dest" >/dev/null 2>&1; then
+          rm -rf "$dest"; cp -r "$tmp/mc/inst/plumber/utils" "$dest"; chmod -R a+rX "$dest"; echo changed
+        fi
+        rm -rf "$tmp"
+      register: api_helpers
+      changed_when: "'changed' in api_helpers.stdout"
+
+    - name: Install the web interface
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ metacheck_component_dir }}/api/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { src: api/api.R, dest: api.R }
+        - { src: app/bibr_client.R, dest: bibr_client.R }
+      register: api_files
+
+    - name: Install the web interface service
+      ansible.builtin.template:
+        src: templates/metacheck/metacheck-api.service.j2
+        dest: /etc/systemd/system/metacheck-api.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: api_service
+
+    - name: Enable and (re)start the web interface
+      ansible.builtin.systemd:
+        name: metacheck-api
+        enabled: true
+        daemon_reload: true
+        state: "{{ 'restarted' if (api_helpers.changed or api_files.changed or api_service.changed or metacheck_install.changed or shiny_env.changed) else 'started' }}"
+
+    - name: Wait for the web interface to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ metacheck_api_port }}/health"
+      register: api_up
+      until: api_up.status == 200
+      retries: 30
+      delay: 2
 
     # ------------------------------------------------------------------
     # nginx (only when the SRC-Nginx component configured the workspace)
