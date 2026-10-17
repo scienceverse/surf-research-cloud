@@ -1,0 +1,107 @@
+---
+# Installs Ollama, configures it, and pulls one model. Shared by the bibr and
+# metacheck components; on a workspace with both, they configure the same
+# Ollama (run bibr first, see README).
+#
+# Expects: ollama_model, ollama_context_length, large_disk (from large_disk.yml).
+# Sets:    ollama_url (address for programs on this workspace).
+#
+# Ollama has no login, so it never listens on the network: on a workspace
+# with Docker it listens on Docker's bridge address (172.17.0.1), which bibr's
+# container reaches as host.docker.internal and which other workspaces on a
+# private network cannot reach; without Docker it listens on 127.0.0.1 only.
+
+- name: Check for Docker's bridge network
+  ansible.builtin.stat:
+    path: /sys/class/net/docker0
+  register: docker0
+
+- name: Choose where Ollama listens
+  ansible.builtin.set_fact:
+    ollama_host: "{{ '172.17.0.1' if docker0.stat.exists else '127.0.0.1' }}"
+
+- name: Set Ollama's address
+  ansible.builtin.set_fact:
+    ollama_url: "http://{{ ollama_host }}:11434"
+    ollama_models_dir: "{{ (large_disk ~ '/ollama-models') if large_disk | length > 0 else '/usr/share/ollama/.ollama/models' }}"
+
+- name: Install Ollama
+  ansible.builtin.shell: curl -fsSL https://ollama.com/install.sh | sh
+  args:
+    creates: /usr/local/bin/ollama
+  register: ollama_install
+
+- name: Create the Ollama model directory
+  ansible.builtin.file:
+    path: "{{ ollama_models_dir }}"
+    state: directory
+    owner: ollama
+    group: ollama
+    mode: "0755"
+
+- name: Create the Ollama systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ollama.service.d
+    state: directory
+    mode: "0755"
+
+- name: Configure Ollama
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ollama.service.d/surf-research-cloud.conf
+    mode: "0644"
+    content: |
+      # Managed by the scienceverse/surf-research-cloud components.
+      [Unit]
+      RequiresMountsFor={{ ollama_models_dir }}
+      {% if ollama_host != '127.0.0.1' %}
+      # Docker's bridge address only exists once Docker has started.
+      After=docker.service
+      Wants=docker.service
+      {% endif %}
+      [Service]
+      Environment=OLLAMA_HOST={{ ollama_host }}:11434
+      Environment=OLLAMA_MODELS={{ ollama_models_dir }}
+      # keep the model in GPU memory between papers
+      Environment=OLLAMA_KEEP_ALIVE=-1
+      Environment=OLLAMA_MAX_LOADED_MODELS=2
+      # Ollama's default window of 4,096 tokens cut off bibr's title step
+      # (3,602 tokens of input left no room for the answer).
+      Environment=OLLAMA_CONTEXT_LENGTH={{ ollama_context_length }}
+  register: ollama_conf
+
+# Configuration written by component version 0.1 (single workspace).
+- name: Remove the old Ollama configuration
+  ansible.builtin.file:
+    path: /etc/systemd/system/ollama.service.d/metacheck.conf
+    state: absent
+  register: ollama_old_conf
+
+- name: Enable and (re)start Ollama
+  ansible.builtin.systemd:
+    name: ollama
+    enabled: true
+    state: "{{ 'restarted' if (ollama_install.changed or ollama_conf.changed or ollama_old_conf.changed) else 'started' }}"
+    daemon_reload: true
+
+- name: Wait for Ollama to answer
+  ansible.builtin.uri:
+    url: "{{ ollama_url }}/api/version"
+  register: ollama_up
+  until: ollama_up.status == 200
+  retries: 30
+  delay: 2
+
+- name: Pull the model {{ ollama_model }}
+  ansible.builtin.uri:
+    url: "{{ ollama_url }}/api/pull"
+    method: POST
+    body_format: json
+    body:
+      name: "{{ ollama_model }}"
+      stream: false
+    timeout: 3600
+  register: ollama_pull
+  until: ollama_pull.status == 200 and (ollama_pull.json.status | default('')) == 'success'
+  retries: 4
+  delay: 30
+  changed_when: false

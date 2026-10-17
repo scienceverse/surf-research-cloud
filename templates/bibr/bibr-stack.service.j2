@@ -1,0 +1,21 @@
+# Managed by the bibr SURF Research Cloud component (scienceverse/surf-research-cloud).
+# One-shot background build and start of bibr's Docker Compose stack.
+# The containers restart on boot through Docker itself; on boot this service
+# only checks that they are up (it rebuilds nothing unless images are missing).
+[Unit]
+Description=Build and start the bibr extraction stack (bibr serve, GLM-OCR, Redis)
+After=docker.service network-online.target ollama.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=BIBR_DIR={{ bibr_dir }}
+Environment=BIBR_LOG_DIR={{ bibr_log_dir }}
+Environment=BIBR_PORT={{ bibr_port }}
+ExecStart={{ bibr_component_dir }}/bin/bibr-stack-up.sh
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

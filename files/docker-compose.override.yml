@@ -1,7 +1,0 @@
-# Managed by the metacheck SURF Research Cloud component.
-# Loaded automatically next to bibr's docker-compose.yml. Gives the bibr
-# container a name for the workspace itself, so it can call Ollama on the host.
-services:
-  bibr-serve:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"

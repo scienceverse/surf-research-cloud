@@ -1,12 +1,8 @@
-# Managed by the metacheck SURF Research Cloud component.
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
 # Included from the SRC-Nginx server block (/etc/nginx/conf.d/tls_main.conf),
 # which already terminates TLS and defines /validate and @custom_401 for the
-# SRAM login. Every location below requires that login.
-
-# The workspace root goes straight to the metacheck report app.
-location = / {
-    return 302 /metacheck/;
-}
+# SRAM login. Every location below requires that login. The workspace root
+# (/) is redirected by 00-root.conf, which this component writes.
 
 # metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
 location /metacheck/ {
@@ -29,28 +25,10 @@ location /metacheck/ {
     client_max_body_size {{ metacheck_max_upload }};
 }
 
-# bibr extraction API (bibr serve on port {{ metacheck_bibr_port }}).
-# Besides the SRAM login, bibr itself requires its bearer token
-# (see /etc/metacheck/bibr_api_key on the workspace).
-location /bibr/ {
-    error_page 401 = @custom_401;
-    auth_request /validate;
-
-    proxy_pass http://127.0.0.1:{{ metacheck_bibr_port }}/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 900s;
-    proxy_request_buffering off;
-    client_max_body_size {{ metacheck_max_upload }};
-}
-
-# Installation progress (plain text), useful while the bibr images build.
+# Installation progress of the metacheck component (plain text).
 location = /metacheck-status {
     error_page 401 = @custom_401;
     auth_request /validate;
-    alias /var/log/metacheck/status.txt;
+    alias {{ metacheck_log_dir }}/status.txt;
     default_type text/plain;
 }

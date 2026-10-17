@@ -6,7 +6,8 @@
 ## version 0.3.3.8). Differences from that app, all switched on by environment
 ## variables that the SURF Research Cloud component writes to ~/.Renviron of
 ## the shiny user, so without them the app behaves exactly like the original:
-##   * BIBR_API_URL / BIBR_API_KEY: "Use bibr on this server" is offered first
+##   * BIBR_API_URL / BIBR_API_KEY (/ BIBR_REMOTE): "Use bibr on this server",
+##     or the collaboration's bibr server on the SRC private network, is offered first
 ##     and preselected; PDFs are converted by the workspace's own bibr through
 ##     bibr_client.R.
 ##   * OLLAMA_BASE_URL / METACHECK_LLM_MODEL: "This server (local model)" is
@@ -260,6 +261,13 @@ GROBID_SERVERS <- list(
 # offered first, and preselected, when BIBR_API_URL is set; the report process
 # inherits BIBR_API_KEY, which convert_bibr() sends as the bearer token.
 BIBR_URL <- Sys.getenv("BIBR_API_URL")
+# TRUE when bibr runs on another workspace of the SRC private network.
+BIBR_REMOTE <- identical(tolower(Sys.getenv("BIBR_REMOTE")), "true")
+BIBR_LABEL <- if (BIBR_REMOTE) {
+  "Use the bibr server of this research collaboration (SURF Research Cloud, private network)"
+} else {
+  "Use bibr on this server (the PDF is converted here)"
+}
 CONVERTERS <- c(
   if (nzchar(BIBR_URL)) {
     list(bibr = list(method = "bibr", backend = "selfhosted", api_url = BIBR_URL))
@@ -321,6 +329,13 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     bibr_read(json)   # bibr_client.R: read(), with a fallback for older metacheck
   } else {
     metacheck::read(json)
+  }
+  # A missing title (NA) makes metacheck's report() replace its whole header
+  # with "NA": no styling, not self-contained (metacheck #497). Until that is
+  # fixed, give the report a visible placeholder instead.
+  ttl <- tryCatch(paper$info$title, error = function(e) NULL)
+  if (is.null(ttl) || length(ttl) == 0 || is.na(ttl[1]) || !nzchar(trimws(ttl[1]))) {
+    paper$info$title <- "(no title found in the PDF)"
   }
 
   # An empty/near-empty conversion reads OK but yields no usable text, so
@@ -502,7 +517,7 @@ options_tab <- tabItem(
     radioButtons(
       "grobid_server_choice", "PDF Conversion Server:",
       choiceNames = c(
-        if (nzchar(BIBR_URL)) list("Use bibr on this server (the PDF is converted here)"),
+        if (nzchar(BIBR_URL)) list(BIBR_LABEL),
         list(
           "Use GDPR compliant GROBID server at Eindhoven University of Technology",
           "Use Full GROBID via HuggingFace (USA)"
@@ -662,7 +677,11 @@ server <- function(input, output, session) {
     grobid       <- input$grobid_server_choice %||% DEFAULT_CONVERTER
 
     grobid_use_text <- switch(grobid,
-      "bibr"        = "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef.",
+      "bibr"        = if (BIBR_REMOTE) {
+        "\U0001F512 The PDF file is converted with bibr on another server of this research collaboration, over SURF Research Cloud's private network. Reference lists are looked up in CrossRef."
+      } else {
+        "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef."
+      },
       "metacheck"   = "\U0001F6E1️ The PDF file is converted using a GDPR compliant server at Eindhoven University of Technology.",
       "huggingface" = "\U0001F310 The PDF file is converted using an external server (HuggingFace, USA).",
       "The PDF file is converted using an external server."

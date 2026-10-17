@@ -1,0 +1,23 @@
+---
+# Finds a large disk for Docker images and model files and sets `large_disk`:
+# the first SRC storage volume mounted under /data/ (persistent), else the
+# temporary /mnt/scratch disk that GPU flavours have (wiped on reboot), else ""
+# (use the boot disk).
+
+- name: Find a large disk
+  ansible.builtin.shell: |
+    set -e
+    vol=$(findmnt -rn -o TARGET | grep '^/data/' | head -1 || true)
+    if [ -n "$vol" ]; then echo "$vol"; exit 0; fi
+    if findmnt -rn /mnt/scratch >/dev/null 2>&1; then echo /mnt/scratch; exit 0; fi
+    echo ""
+  register: large_disk_probe
+  changed_when: false
+
+- name: Set the large disk
+  ansible.builtin.set_fact:
+    large_disk: "{{ large_disk_probe.stdout | trim }}"
+
+- name: Show the large disk
+  ansible.builtin.debug:
+    msg: "Large disk: {{ large_disk if large_disk | length > 0 else 'none, using the boot disk' }}"

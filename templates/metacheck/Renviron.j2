@@ -1,0 +1,24 @@
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Read by R processes of the shiny user (the metacheck paper report app).
+{% if metacheck_bibr_url_value | length > 0 %}
+
+# bibr extraction server: on this workspace, or another workspace on the
+# SRC private network (BIBR_REMOTE=true). The app offers it first.
+BIBR_API_URL={{ metacheck_bibr_url_value }}
+BIBR_API_KEY={{ metacheck_bibr_key_value }}
+BIBR_REMOTE={{ 'true' if metacheck_bibr_remote else 'false' }}
+{% endif %}
+{% if metacheck_local_llm %}
+
+# Local language model (Ollama on this workspace) for the LLM power check.
+OLLAMA_BASE_URL={{ ollama_url }}
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+{% endif %}
+
+# Keys for the app's optional cloud model providers.
+{% if metacheck_mistral_api_key != 'none' %}
+MISTRAL_API_KEY={{ metacheck_mistral_api_key }}
+{% endif %}
+{% if metacheck_groq_api_key != 'none' %}
+GROQ_API_KEY={{ metacheck_groq_api_key }}
+{% endif %}

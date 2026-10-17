@@ -1,0 +1,62 @@
+---
+# Shared first steps of every component in this repository.
+# Expects: component_label (for messages), status_dir, status_file.
+
+- name: Wait for system to become reachable
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+
+- name: Gather facts
+  ansible.builtin.setup:
+
+- name: Refuse anything but Ubuntu 22.04
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_version == "22.04"
+    fail_msg: >-
+      {{ component_label }} is built for Ubuntu 22.04 ("Ubuntu 2204" or
+      "Ubuntu 2204 with CUDA"): SRC's External component, which every
+      non-SURF component needs, is not available for Ubuntu 24.04.
+
+- name: Look for an NVIDIA GPU
+  ansible.builtin.command: nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+  register: gpu_probe
+  changed_when: false
+  failed_when: false
+
+- name: Note whether this workspace has a GPU
+  ansible.builtin.set_fact:
+    has_gpu: "{{ gpu_probe.rc == 0 and (gpu_probe.stdout | trim | length > 0) }}"
+
+- name: Show the GPU
+  ansible.builtin.debug:
+    msg: "GPU: {{ gpu_probe.stdout | default('none') if has_gpu else 'none' }}"
+
+- name: Create the status directory
+  ansible.builtin.file:
+    path: "{{ status_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Start the status file
+  ansible.builtin.copy:
+    dest: "{{ status_file }}"
+    content: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  {{ component_label }}: installing\n"
+    mode: "0644"
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - git
+      - jq
+      - openssl
+      - apt-transport-https
+      - software-properties-common
+    state: present
+    update_cache: true
