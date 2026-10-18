@@ -152,6 +152,17 @@
       when: metacheck_bibr_url == 'auto' and bibr_local_key.stat.exists
       no_log: true
 
+    # An easy mistake in the portal, where the token's row comes first.
+    - name: Check that the bibr address and token are not swapped
+      ansible.builtin.assert:
+        that:
+          - not (metacheck_bibr_api_key is regex('^https?://') and metacheck_bibr_url is not regex('^https?://'))
+        fail_msg: >-
+          The bibr address and token are swapped: metacheck_bibr_url must be the
+          address (such as http://10.10.10.12:8000) and metacheck_bibr_api_key the
+          token. Correct them in the catalog item's parameters.
+        quiet: true
+
     - name: Check the bibr settings
       ansible.builtin.assert:
         that:
