@@ -117,6 +117,27 @@ do_repocheck <- function(job_dir, job) {
     # the job's step.
     options(shiny_progress_file = file.path(job_dir, "progress.txt"),
             metacheck.repo_cache.dir = file.path(job_dir, "cache"))
+    if (length(job$modules)) {
+      # An installed module (api.R allows only those: INSTALLED_MODULES, for a
+      # .zip), such as tue_datamanager_check: run on the unpacked folder, with
+      # this server's language model, and its own full report. It runs the
+      # metacheck modules it needs itself.
+      .setup_llm()
+      m <- job$modules[[1]]
+      margs <- list(local_path = repo_dir, readme_revised_dir = job_dir)
+      if (is.logical(job$human_participants) && length(job$human_participants) == 1 &&
+          !is.na(job$human_participants)) {
+        margs$human_participants <- job$human_participants
+      }
+      rc$use_shiny_progress()
+      .set_status(job_dir, step = sprintf("running %s", m))
+      metacheck::report(paper, modules = m, output_file = file.path(job_dir, "result.html"),
+                        args = stats::setNames(list(margs), m))
+      unlink(file.path(job_dir, "progress.txt"))
+      .set_status(job_dir, status = "done", step = "done", finished = .now(),
+                  result_type = "text/html; charset=utf-8")
+      return(invisible())
+    }
     modules <- rc$MODULES
     labels <- rc$MODULE_LABELS[rc$MODULES]
     if (isTRUE(job$run_code)) {

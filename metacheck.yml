@@ -26,6 +26,11 @@
     metacheck_repo: "scienceverse/metacheck"
     # dev is where metacheck is developed; main lags months behind.
     metacheck_ref: "dev"
+    # Modules to install from GitHub (metacheck::module_install(), metacheck
+    # 0.4.0.1 or later), "owner/repo", separated by commas or spaces; "none" =
+    # none. The web interface's repository check can run each on an uploaded
+    # .zip (modules=<name>); nobody can install a module through it.
+    metacheck_modules: "Lakens/tue_datamanager_check"
     # "auto" = the bibr on this workspace if the bibr component ran first,
     # else none; "none" = no bibr; or a bibr address on the SRC private
     # network, such as http://10.10.10.12:8000
@@ -64,6 +69,8 @@
     metacheck_shiny_port: 3838
     metacheck_api_port: 2005
     metacheck_component_dir: /opt/metacheck-component
+    # installed modules (METACHECK_MODULES_DIR), readable by the shiny user
+    metacheck_modules_dir: /opt/metacheck-component/modules
     metacheck_log_dir: /var/log/metacheck
     status_dir: /var/log/metacheck
     status_file: /var/log/metacheck/status.txt
@@ -356,6 +363,36 @@
     - name: Show the installed metacheck
       ansible.builtin.debug:
         msg: "{{ metacheck_install.stdout_lines | last }}"
+
+    - name: Create the folder for installed metacheck modules
+      ansible.builtin.file:
+        path: "{{ metacheck_modules_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy the module install script
+      ansible.builtin.copy:
+        src: files/metacheck/install-modules.R
+        dest: "{{ metacheck_component_dir }}/bin/install-modules.R"
+        mode: "0644"
+
+    - name: Install metacheck modules from GitHub (metacheck_modules)
+      ansible.builtin.command:
+        argv: "{{ ['Rscript', metacheck_component_dir ~ '/bin/install-modules.R'] + (metacheck_modules | regex_replace(',', ' ')).split() }}"
+      environment:
+        METACHECK_MODULES_DIR: "{{ metacheck_modules_dir }}"
+      register: metacheck_modules_install
+      # module_install() and module_update() say "Installed ..." when they
+      # downloaded a commit, "... is already up to date" otherwise
+      changed_when: "'Installed ' in metacheck_modules_install.stderr"
+      when: metacheck_modules not in ['', 'none']
+
+    - name: Show the installed modules
+      ansible.builtin.debug:
+        msg: "{{ (metacheck_modules_install.stderr_lines | select('match', '^NOT INSTALLED') | list) + [metacheck_modules_install.stdout_lines | last] }}"
+      when: metacheck_modules not in ['', 'none']
 
     - name: Create the app directory
       ansible.builtin.file:

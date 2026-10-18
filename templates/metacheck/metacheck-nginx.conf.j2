@@ -65,6 +65,19 @@ location /api/ {
     limit_req zone=metacheck_api burst=6 nodelay;
     limit_req_status 429;
     error_page 429 = @metacheck_api_429;
+
+    # Web pages on any website, or opened from disk (such as the TU/e data
+    # manager check's page), may use the interface: it is open to anyone
+    # already, and no login or cookie is involved. A browser first asks
+    # (OPTIONS) before an upload that reports its progress.
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type" always;
+        add_header Access-Control-Max-Age 86400 always;
+        return 204;
+    }
+    add_header Access-Control-Allow-Origin "*" always;
 {% else %}
     error_page 401 = @custom_401;
     auth_request /validate;
@@ -91,6 +104,9 @@ location /api/ {
 # Uploads over the size limit, answered as JSON like the interface's own errors.
 location @metacheck_api_413 {
     default_type application/json;
+{% if metacheck_nginx_public | bool %}
+    add_header Access-Control-Allow-Origin "*" always;
+{% endif %}
     return 413 '{"error":"The file is too large: PDFs and bibr JSON may be at most 50 MB, .zip files of data and code folders at most 500 MB."}';
 }
 
@@ -98,6 +114,7 @@ location @metacheck_api_413 {
 # The refusal above as JSON, so programs and web pages can show the message.
 location @metacheck_api_429 {
     default_type application/json;
+    add_header Access-Control-Allow-Origin "*" always;
     return 429 '{"error":"Too many uploads from your address. Wait a minute and try again."}';
 }
 
