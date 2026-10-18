@@ -13,7 +13,9 @@
 #   POST /convert              PDF              -> bibr JSON
 #   POST /repocheck            .zip of a data/code folder, or a link to an
 #                              online repository (field url) -> HTML report of
-#                              repo_check, code_check and data_check
+#                              repo_check, code_check and data_check; or, with
+#                              modules=<an installed module> (a .zip only),
+#                              that module's report
 # Other:
 #   GET  /modules, GET /health; documentation at /__docs__/ (under /api/).
 #
@@ -351,6 +353,28 @@ later::later(.scheduler, 1)
 
 .parse_flag <- function(x) tolower(trimws(x %||% "false")) %in% c("true", "1", "yes")
 
+# "true"/"false" as TRUE/FALSE; anything else (or nothing) as NA, "not known".
+.parse_answer <- function(x) {
+  x <- tolower(trimws(x %||% ""))
+  if (x %in% c("true", "1", "yes")) TRUE else if (x %in% c("false", "0", "no")) FALSE else NA
+}
+
+# The installed module a repository check runs (field `modules`), or none (the
+# usual repository check). One module at a time, and only one installed on
+# this server (INSTALLED_MODULES): nobody can install a module through the API.
+.parse_installed_module <- function(param) {
+  if (is.null(param) || !nzchar(trimws(param))) return(character(0))
+  mods <- trimws(strsplit(param, ",")[[1]])
+  mods <- mods[nzchar(mods)]
+  if (length(mods) != 1) stop("A repository check runs one installed module at a time.", call. = FALSE)
+  if (!mods %in% INSTALLED_MODULES$name) {
+    stop(sprintf("%s is not installed on this server. Installed modules: %s", mods,
+                 if (nrow(INSTALLED_MODULES)) paste(INSTALLED_MODULES$name, collapse = ", ") else "none"),
+         call. = FALSE)
+  }
+  mods
+}
+
 .parse_modules <- function(param) {
   mods <- if (!is.null(param) && nzchar(param)) trimws(strsplit(param, ",")[[1]]) else DEFAULT_MODULES
   bad <- setdiff(mods, ALLOWED_MODULES)
@@ -384,7 +408,12 @@ later::later(.scheduler, 1)
   if (up$kind == "pdf" && !nzchar(Sys.getenv("BIBR_API_URL"))) {
     stop("This server has no bibr: send bibr JSON instead of a PDF.", call. = FALSE)
   }
-  modules <- if (kind %in% c("convert", "repocheck")) character(0) else .parse_modules(up$fields$modules)
+  modules <- if (kind == "convert") character(0)
+             else if (kind == "repocheck") .parse_installed_module(up$fields$modules)
+             else .parse_modules(up$fields$modules)
+  if (length(modules) && up$kind == "url") {
+    stop("An installed module checks an uploaded .zip of a data package, not a link.", call. = FALSE)
+  }
   busy <- function(msg) {
     e <- simpleError(msg); class(e) <- c("queue_full", class(e)); stop(e)
   }
@@ -403,9 +432,13 @@ later::later(.scheduler, 1)
                             # run the code in the sandbox: for a repository check by
                             # default, for a paper (its repository, through the links in
                             # the paper) only when asked; only where the sandbox is on
-                            run_code = SANDBOX_ON && kind != "convert" &&
+                            # an installed module runs no code in the sandbox
+                            run_code = SANDBOX_ON && kind != "convert" && !length(modules) &&
                               (if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
                                else .parse_flag(up$fields$run_code)),
+                            # for an installed module: whether people took part, if
+                            # the sender knows (true/false); null lets it decide
+                            human_participants = .parse_answer(up$fields$human_participants),
                             source = if (identical(up$fields$source, "website")) "website" else "code",
                             visitor = .visitor_code(req),
                             report = .parse_flag(up$fields$report)),
@@ -535,11 +568,26 @@ MODULE_INFO <- tryCatch({
   ml
 }, error = function(e) NULL)
 
-#* The modules that may be requested, the default set, and each one's title and description
+# Modules installed from GitHub on this server (the playbook's
+# metacheck_modules, with metacheck::module_install()), such as
+# tue_datamanager_check: a repository check of an uploaded .zip runs one of
+# them when asked (field `modules`) and returns its own report. Only the
+# administrator installs them; read once, when the API starts.
+INSTALLED_MODULES <- tryCatch({
+  ml <- as.data.frame(metacheck::module_list())
+  ml <- ml[!is.na(ml$source), c("name", "title", "description", "source")]
+  ml$description <- trimws(gsub("[[:space:]]+", " ", ml$description))
+  rownames(ml) <- NULL
+  ml
+}, error = function(e) data.frame(name = character(0), title = character(0),
+                                  description = character(0), source = character(0)))
+
+#* The modules that may be requested, the default set, and each one's title and description; `installed`: the modules installed on this server that a repository check (.zip) can run instead
 #* @get /modules
 #* @serializer json
 function() {
-  list(allowed = ALLOWED_MODULES, default = DEFAULT_MODULES, info = MODULE_INFO)
+  list(allowed = ALLOWED_MODULES, default = DEFAULT_MODULES, info = MODULE_INFO,
+       installed = INSTALLED_MODULES)
 }
 
 #* Submit a job; answers at once with the job's id and where to follow it
@@ -549,7 +597,8 @@ function() {
 #* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
 #* @param url for repocheck, instead of a file: a link to an online repository (GitHub, OSF, Zenodo, ...)
 #* @param kind "report" (default), "check", "convert" or "repocheck"
-#* @param modules Comma-separated module names (optional; see GET /modules)
+#* @param modules Comma-separated module names (optional; see GET /modules); for repocheck, one installed module to run on the .zip instead (see `installed` in GET /modules)
+#* @param human_participants repocheck with an installed module: "true" or "false" when you know whether people took part or personal data was used (optional)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
@@ -617,4 +666,6 @@ function(req, res) .one_call(req, res, "convert")
 #* @param file:file The .zip of the folder (or, instead, `url`)
 #* @param url A link to an online repository (GitHub, OSF, Zenodo, Dataverse, ...), instead of a .zip; the server fetches its public files
 #* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health)
+#* @param modules An installed module to run on the .zip instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
+#* @param human_participants For an installed module: "true" or "false" when you know whether people took part or personal data was used (optional; the module decides otherwise)
 function(req, res) .one_call(req, res, "repocheck")

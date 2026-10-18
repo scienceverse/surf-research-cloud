@@ -23,6 +23,10 @@ METACHECK_LLM_MODEL={{ metacheck_llm_model }}
 METACHECK_LLM_SHARED=true
 {% endif %}
 
+# Modules installed from GitHub (metacheck_modules, metacheck::module_install()),
+# which the app and the web interface find by name.
+METACHECK_MODULES_DIR={{ metacheck_modules_dir }}
+
 # Anonymous use counts of the app (metacheck's usage_record()) and of the web
 # interface (api_usage.csv); `sudo metacheck-usage` summarises them.
 METACHECK_USAGE_DIR={{ metacheck_usage_dir }}

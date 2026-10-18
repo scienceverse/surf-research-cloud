@@ -281,7 +281,7 @@ DEFAULT_CONVERTER <- if (nzchar(BIBR_URL)) "bibr" else "metacheck"
 # raised as usual and shown to the user through explain_error(). Returns
 # list(htmlpath, crossref_skipped).
 paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
-                      use_llm, llm_model, htmlpath) {
+                      use_llm, llm_model, htmlpath, pdf_name = basename(pdf_path)) {
   suppressPackageStartupMessages(library(metacheck))
   source("render_report.R")
   source("shiny_progress.R")
@@ -311,8 +311,9 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     source("bibr_client.R")
     # bibr completes the references through Crossref only when the visitor
     # ticked "Query CrossRef" (which sends the reference list to Crossref).
+    # pdf_name: the uploaded file's own name (Shiny saves it as 0.pdf)
     json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url,
-                         crossref = isTRUE(use_crossref))
+                         crossref = isTRUE(use_crossref), file_name = pdf_name)
   } else {
     json <- do.call(metacheck::convert,
                     c(list(pdf_path, tmp, crossref_lookup = FALSE), convert_args))
@@ -823,7 +824,7 @@ server <- function(input, output, session) {
     # The report itself is made in its own R process (paper_job(), via
     # background_job.R), so this app stays responsive for other visitors.
     job <- bg_start(paper_job, list(
-      pdf_path = files$datapath, tmp = tmp,
+      pdf_path = files$datapath, pdf_name = files$name, tmp = tmp,
       convert_args = CONVERTERS[[input$grobid_server_choice %||% DEFAULT_CONVERTER]],
       use_crossref = use_crossref, modules = modules,
       use_llm = use_llm, llm_model = prov$model, htmlpath = htmlpath

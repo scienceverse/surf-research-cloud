@@ -299,8 +299,8 @@ folder. It follows the same switch as the app: open to anyone while
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
-| `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository | the HTML report of `repo_check`, `code_check` and `data_check` |
-| `GET /api/modules` | | the modules that may be requested, and the default set |
+| `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository; optional `modules` = an installed module (a .zip only), `human_participants` = `true`/`false` | the HTML report of `repo_check`, `code_check` and `data_check`, or of the installed module |
+| `GET /api/modules` | | the modules that may be requested, the default set, and (`installed`) the modules installed on this server |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
 | `/api/__docs__/` | | interactive documentation in the browser |
 
@@ -355,6 +355,33 @@ after the job finished (`METACHECK_API_KEEP_MINUTES`); until then anyone with th
 job's id can fetch them, and the id is a random UUID. While public: 6 uploads per
 minute per visitor (burst 6), beyond that HTTP 429 with a JSON `error`; status and
 result requests are not limited.
+
+### Installed modules
+
+Modules installed from GitHub (`metacheck_modules`), such as
+[`tue_datamanager_check`](https://github.com/Lakens/tue_datamanager_check) (a check of a
+data package the way TU/e's data managers do), run on an uploaded .zip instead of the
+usual folder check: `POST /api/jobs` with `kind=repocheck`, or `POST /api/repocheck`,
+with the field `modules=tue_datamanager_check`. The worker unpacks the .zip as for a
+folder check, sets up the workspace's language model, runs that one module on the
+folder and returns the module's own full report; the module runs the metacheck modules
+it needs itself. `tue_datamanager_check` also takes `human_participants=true` or
+`false` (whether people took part, when the sender knows). Only the administrator
+installs modules; a module that is not installed, more than one module, or a link
+instead of a .zip is refused (HTTP 400), and a paper report cannot ask for an installed
+module. `GET /api/modules` lists them under `installed`.
+
+```sh
+curl -F kind=repocheck -F modules=tue_datamanager_check -F file=@package.zip \
+     https://<workspace>/api/jobs
+```
+
+While the web interface is open to anyone (`metacheck-public on`), it allows web pages
+on any website, and pages opened from disk, to use it (CORS: `Access-Control-Allow-Origin:
+*`, also on nginx's own answers about too large files and too many uploads). The
+TU/e data manager check has such a page (`web/` in its repository), which runs on any
+website, as a Shiny app or locally. Behind the SRAM login nothing changes: a page
+elsewhere cannot log in.
 
 Examples (all tested; replace the address with your workspace's):
 
@@ -478,6 +505,7 @@ and `auto` means "decide on the workspace".
 | Key | Default | Meaning |
 |---|---|---|
 | `metacheck_repo` / `metacheck_ref` | `scienceverse/metacheck` / `dev` | where metacheck comes from (`dev`: `main` lags months behind) |
+| `metacheck_modules` | `Lakens/tue_datamanager_check` | modules to install from GitHub (`owner/repo`, separated by commas or spaces; `none` = none), with `metacheck::module_install()` into `/opt/metacheck-component/modules` (`METACHECK_MODULES_DIR`); each set-up updates them to the newest commit. Needs metacheck 0.4.0.4 or later; a module that cannot be installed is reported and skipped (see "Installed modules") |
 | `metacheck_bibr_url` | `auto` | `auto` = the bibr on this workspace, if any; `none` = no bibr; or an address such as `http://10.10.10.12:8000` |
 | `metacheck_bibr_api_key` | `none` | bibr's token; required with an address |
 | `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU; `none` = no local model |
