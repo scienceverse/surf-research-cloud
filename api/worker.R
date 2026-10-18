@@ -118,13 +118,16 @@ do_repocheck <- function(job_dir, job) {
     options(shiny_progress_file = file.path(job_dir, "progress.txt"),
             metacheck.repo_cache.dir = file.path(job_dir, "cache"))
     if (length(job$modules)) {
-      # An installed module (api.R allows only those: INSTALLED_MODULES, for a
-      # .zip), such as tue_datamanager_check: run on the unpacked folder, with
+      # An installed module (api.R allows only those: INSTALLED_MODULES), such
+      # as tue_datamanager_check: run on the unpacked folder or the link, with
       # this server's language model, and its own full report. It runs the
       # metacheck modules it needs itself.
       .setup_llm()
       m <- job$modules[[1]]
-      margs <- list(local_path = repo_dir, readme_revised_dir = job_dir)
+      # an unpacked .zip, or a link (checked by api.R: public addresses only),
+      # whose files the module fetches itself (100 MB per file, 500 MB in all)
+      margs <- list(local_path = if (identical(job$input_kind, "url")) job$url else repo_dir,
+                    readme_revised_dir = job_dir)
       if (is.logical(job$human_participants) && length(job$human_participants) == 1 &&
           !is.na(job$human_participants)) {
         margs$human_participants <- job$human_participants

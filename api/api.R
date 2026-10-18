@@ -14,7 +14,7 @@
 #   POST /repocheck            .zip of a data/code folder, or a link to an
 #                              online repository (field url) -> HTML report of
 #                              repo_check, code_check and data_check; or, with
-#                              modules=<an installed module> (a .zip only),
+#                              modules=<an installed module>,
 #                              that module's report
 # Other:
 #   GET  /modules, GET /health; documentation at /__docs__/ (under /api/).
@@ -411,9 +411,6 @@ later::later(.scheduler, 1)
   modules <- if (kind == "convert") character(0)
              else if (kind == "repocheck") .parse_installed_module(up$fields$modules)
              else .parse_modules(up$fields$modules)
-  if (length(modules) && up$kind == "url") {
-    stop("An installed module checks an uploaded .zip of a data package, not a link.", call. = FALSE)
-  }
   busy <- function(msg) {
     e <- simpleError(msg); class(e) <- c("queue_full", class(e)); stop(e)
   }
@@ -597,7 +594,7 @@ function() {
 #* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
 #* @param url for repocheck, instead of a file: a link to an online repository (GitHub, OSF, Zenodo, ...)
 #* @param kind "report" (default), "check", "convert" or "repocheck"
-#* @param modules Comma-separated module names (optional; see GET /modules); for repocheck, one installed module to run on the .zip instead (see `installed` in GET /modules)
+#* @param modules Comma-separated module names (optional; see GET /modules); for repocheck, one installed module to run on the .zip or link instead (see `installed` in GET /modules)
 #* @param human_participants repocheck with an installed module: "true" or "false" when you know whether people took part or personal data was used (optional)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
@@ -666,6 +663,6 @@ function(req, res) .one_call(req, res, "convert")
 #* @param file:file The .zip of the folder (or, instead, `url`)
 #* @param url A link to an online repository (GitHub, OSF, Zenodo, Dataverse, ...), instead of a .zip; the server fetches its public files
 #* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health)
-#* @param modules An installed module to run on the .zip instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
+#* @param modules An installed module to run on the .zip or link instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
 #* @param human_participants For an installed module: "true" or "false" when you know whether people took part or personal data was used (optional; the module decides otherwise)
 function(req, res) .one_call(req, res, "repocheck")

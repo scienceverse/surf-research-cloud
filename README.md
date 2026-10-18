@@ -299,7 +299,7 @@ folder. It follows the same switch as the app: open to anyone while
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
-| `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository; optional `modules` = an installed module (a .zip only), `human_participants` = `true`/`false` | the HTML report of `repo_check`, `code_check` and `data_check`, or of the installed module |
+| `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository; optional `modules` = an installed module, `human_participants` = `true`/`false` | the HTML report of `repo_check`, `code_check` and `data_check`, or of the installed module |
 | `GET /api/modules` | | the modules that may be requested, the default set, and (`installed`) the modules installed on this server |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
 | `/api/__docs__/` | | interactive documentation in the browser |
@@ -360,19 +360,23 @@ result requests are not limited.
 
 Modules installed from GitHub (`metacheck_modules`), such as
 [`tue_datamanager_check`](https://github.com/Lakens/tue_datamanager_check) (a check of a
-data package the way TU/e's data managers do), run on an uploaded .zip instead of the
-usual folder check: `POST /api/jobs` with `kind=repocheck`, or `POST /api/repocheck`,
-with the field `modules=tue_datamanager_check`. The worker unpacks the .zip as for a
-folder check, sets up the workspace's language model, runs that one module on the
-folder and returns the module's own full report; the module runs the metacheck modules
-it needs itself. `tue_datamanager_check` also takes `human_participants=true` or
-`false` (whether people took part, when the sender knows). Only the administrator
-installs modules; a module that is not installed, more than one module, or a link
-instead of a .zip is refused (HTTP 400), and a paper report cannot ask for an installed
+data package the way TU/e's data managers do), run on an uploaded .zip or a link
+instead of the usual folder check: `POST /api/jobs` with `kind=repocheck`, or
+`POST /api/repocheck`, with the field `modules=tue_datamanager_check`. For a .zip the
+worker unpacks it as for a folder check; a link (checked as for a folder check: public
+addresses only) is given to the module, which fetches the repository's public files
+itself (100 MB per file, 500 MB in all). The worker sets up the workspace's language
+model, runs that one module and returns the module's own full report; the module runs
+the metacheck modules it needs itself. `tue_datamanager_check` also takes
+`human_participants=true` or `false` (whether people took part, when the sender knows).
+Only the administrator installs modules; a module that is not installed or more than
+one module is refused (HTTP 400), and a paper report cannot ask for an installed
 module. `GET /api/modules` lists them under `installed`.
 
 ```sh
 curl -F kind=repocheck -F modules=tue_datamanager_check -F file=@package.zip \
+     https://<workspace>/api/jobs
+curl -F kind=repocheck -F modules=tue_datamanager_check -F url=https://github.com/user/repo \
      https://<workspace>/api/jobs
 ```
 
