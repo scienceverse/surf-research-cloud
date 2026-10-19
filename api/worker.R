@@ -132,9 +132,22 @@ do_repocheck <- function(job_dir, job) {
           !is.na(job$human_participants)) {
         margs$human_participants <- job$human_participants
       }
+      if (isTRUE(job$run_code)) {
+        # the module runs the code with metacheck's reproducibility check, as
+        # for a repository check: in the Docker sandbox, never installing
+        # packages, at most 5 minutes per script (see below)
+        margs$run_code <- TRUE
+        margs$run_args <- list(sandbox = "docker", install_missing = FALSE,
+                               docker_use_declared_version = FALSE, timeout = 300)
+        options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+        Sys.umask("000")   # see below: the sandbox's user writes into these folders
+      }
       rc$use_shiny_progress()
       .set_status(job_dir, step = sprintf("running %s", m))
+      # the checklist report: what to fix and to improve first, with what was
+      # found and what to do on separate lines (metacheck 0.4.0.6)
       metacheck::report(paper, modules = m, output_file = file.path(job_dir, "result.html"),
+                        report_type = "checklist",
                         args = stats::setNames(list(margs), m))
       unlink(file.path(job_dir, "progress.txt"))
       .set_status(job_dir, status = "done", step = "done", finished = .now(),
