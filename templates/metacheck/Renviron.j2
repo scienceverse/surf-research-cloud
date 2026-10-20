@@ -1,0 +1,40 @@
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Read by R processes of the shiny user (the metacheck paper report app).
+{% if metacheck_bibr_url_value | length > 0 %}
+
+# bibr extraction server: on this workspace, or another workspace on the
+# SRC private network (BIBR_REMOTE=true). The app offers it first.
+BIBR_API_URL={{ metacheck_bibr_url_value }}
+BIBR_API_KEY={{ metacheck_bibr_key_value }}
+BIBR_REMOTE={{ 'true' if metacheck_bibr_remote else 'false' }}
+{% endif %}
+{% if metacheck_local_llm %}
+
+# Local language model (Ollama on this workspace) for the LLM power check.
+OLLAMA_BASE_URL={{ ollama_url }}
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+{% elif metacheck_shared_llm | bool %}
+
+# The bibr workspace's language model, on the SRC private network, for the LLM
+# power check (shared through nginx there, with bibr's token).
+OLLAMA_BASE_URL={{ metacheck_shared_llm_url }}
+VLLM_API_KEY={{ metacheck_bibr_key_value }}
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+METACHECK_LLM_SHARED=true
+{% endif %}
+
+# Modules installed from GitHub (metacheck_modules, metacheck::module_install()),
+# which the app and the web interface find by name.
+METACHECK_MODULES_DIR={{ metacheck_modules_dir }}
+
+# Anonymous use counts of the app (metacheck's usage_record()) and of the web
+# interface (api_usage.csv); `sudo metacheck-usage` summarises them.
+METACHECK_USAGE_DIR={{ metacheck_usage_dir }}
+
+# Keys for the app's optional cloud model providers.
+{% if metacheck_mistral_api_key != 'none' %}
+MISTRAL_API_KEY={{ metacheck_mistral_api_key }}
+{% endif %}
+{% if metacheck_groq_api_key != 'none' %}
+GROQ_API_KEY={{ metacheck_groq_api_key }}
+{% endif %}

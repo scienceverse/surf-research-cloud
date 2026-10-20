@@ -1,0 +1,482 @@
+---
+# bibr on SURF Research Cloud
+#
+# Installs on one GPU workspace:
+#   * bibr serve + GLM-OCR + Redis (Docker Compose, from the bibr repository)
+#   * Ollama with a small local model for bibr's metadata step
+#   * nginx locations behind the SRAM login (only when SRC-Nginx is present)
+#
+# bibr's API listens on 127.0.0.1 and, when the workspace is on an SRC private
+# network, on its private address, so metacheck workspaces on that network
+# can use it. Every request needs bibr's bearer token (/etc/bibr/api_key).
+#
+# SRC runs this as root on the workspace itself:
+#   ansible-playbook --connection=local -i localhost, -b --extra-vars="<parameters>" bibr.yml
+
+- name: bibr extraction server on a SURF Research Cloud GPU workspace
+  hosts: localhost
+  gather_facts: false
+  become: true
+
+  vars:
+    # ---- component parameters (strings; "none" = not set, "auto" = decide) ----
+    bibr_ref: "v0.7.3"
+    # "ollama" = local model on this GPU; "google", "anthropic", "openai" = cloud
+    bibr_llm_provider: "ollama"
+    bibr_llm_model: "qwen3.5:4b"
+    bibr_ollama_context: "16384"
+    bibr_google_api_key: "none"
+    bibr_anthropic_api_key: "none"
+    bibr_openai_api_key: "none"
+    bibr_crossref_email: "none"
+    bibr_ocr_mem_fraction: "0.60"
+    bibr_max_upload: "100M"
+    bibr_start: "true"
+    bibr_docker_root: "auto"
+    # "auto" generates a token on the workspace; or give a fixed token of at
+    # least 32 characters, so metacheck workspaces can be set up in advance
+    bibr_api_key: "auto"
+    # "auto" = 127.0.0.1 plus the SRC private network address when there is
+    # one; "local" = 127.0.0.1 only; or an extra IPv4 address to listen on
+    bibr_listen: "auto"
+    # "true" = open bibr to anyone at the workspace's web address, without the
+    # SRAM login (nginx adds the token); "false" = SRAM login only. Can be
+    # changed later on the workspace with `sudo bibr-public on|off`.
+    bibr_public: "false"
+    # "true" = let metacheck workspaces on the SRC private network use this
+    # workspace's language model (through nginx, with bibr's token, see
+    # templates/bibr/bibr-llm-share-nginx.conf.j2), so they need no GPU
+    bibr_share_llm: "true"
+
+    # ---- fixed settings ----
+    component_label: "bibr component"
+    bibr_port: 8000
+    bibr_llm_share_port: 11435
+    bibr_dir: /opt/bibr
+    bibr_component_dir: /opt/bibr-component
+    bibr_secrets_dir: /etc/bibr
+    bibr_log_dir: /var/log/bibr
+    status_dir: /var/log/bibr
+    status_file: /var/log/bibr/status.txt
+
+  tasks:
+    - name: Shared first steps
+      ansible.builtin.include_tasks: tasks/base.yml
+
+    - name: Stop without a GPU
+      ansible.builtin.assert:
+        that: has_gpu | bool
+        fail_msg: "The bibr component needs an NVIDIA GPU (the OCR model runs on it). Use an A10 flavour."
+
+    # ------------------------------------------------------------------
+    # Secrets
+    # ------------------------------------------------------------------
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ bibr_component_dir }}/bin", mode: "0755" }
+        - { path: "{{ bibr_secrets_dir }}", mode: "0700" }
+
+    - name: Check a fixed bibr token
+      ansible.builtin.assert:
+        that:
+          - bibr_api_key | length >= 32
+          - bibr_api_key is regex('^[A-Za-z0-9._~-]+$')
+        fail_msg: "bibr_api_key must be 'auto' or at least 32 letters, digits or . _ ~ -"
+      when: bibr_api_key != 'auto'
+      no_log: true
+
+    - name: Write the fixed bibr token
+      ansible.builtin.copy:
+        dest: "{{ bibr_secrets_dir }}/api_key"
+        content: "{{ bibr_api_key }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: bibr_api_key != 'auto'
+      no_log: true
+
+    # Component version 0.1 (single workspace) kept its secrets in /etc/metacheck.
+    - name: Take over secrets from component version 0.1
+      ansible.builtin.shell: |
+        if [ ! -e {{ bibr_secrets_dir }}/{{ item.new }} ] && [ -s /etc/metacheck/{{ item.old }} ]; then
+          cp /etc/metacheck/{{ item.old }} {{ bibr_secrets_dir }}/{{ item.new }}
+          chmod 0600 {{ bibr_secrets_dir }}/{{ item.new }}
+          echo copied
+        fi
+      loop:
+        - { old: bibr_api_key, new: api_key }
+        - { old: ocr_api_key, new: ocr_api_key }
+        - { old: redis_password, new: redis_password }
+      register: old_secrets
+      changed_when: "'copied' in old_secrets.stdout"
+
+    - name: Generate missing secrets (bibr token, OCR token, Redis password)
+      ansible.builtin.shell: openssl rand -hex 32 > {{ bibr_secrets_dir }}/{{ item }} && chmod 0600 {{ bibr_secrets_dir }}/{{ item }}
+      args:
+        creates: "{{ bibr_secrets_dir }}/{{ item }}"
+      loop:
+        - api_key
+        - ocr_api_key
+        - redis_password
+
+    - name: Read secrets
+      ansible.builtin.slurp:
+        src: "{{ bibr_secrets_dir }}/{{ item }}"
+      loop:
+        - api_key
+        - ocr_api_key
+        - redis_password
+      register: secret_files
+      no_log: true
+
+    - name: Set secret facts
+      ansible.builtin.set_fact:
+        bibr_api_key_value: "{{ (secret_files.results[0].content | b64decode) | trim }}"
+        bibr_ocr_api_key: "{{ (secret_files.results[1].content | b64decode) | trim }}"
+        bibr_redis_password: "{{ (secret_files.results[2].content | b64decode) | trim }}"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # Docker + NVIDIA container toolkit
+    # ------------------------------------------------------------------
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable"
+        filename: docker
+        state: present
+
+    - name: Add NVIDIA container toolkit apt key
+      ansible.builtin.shell: curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /etc/apt/keyrings/nvidia-container-toolkit.gpg
+      args:
+        creates: /etc/apt/keyrings/nvidia-container-toolkit.gpg
+
+    - name: Add NVIDIA container toolkit apt repository
+      ansible.builtin.shell: >
+        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list
+        | sed 's#deb https://#deb [signed-by=/etc/apt/keyrings/nvidia-container-toolkit.gpg] https://#g'
+        > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+      args:
+        creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+    - name: Install Docker and the NVIDIA container toolkit
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - nvidia-container-toolkit
+        state: present
+        update_cache: true
+      register: docker_pkgs
+
+    - name: Register the NVIDIA runtime with Docker
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+      args:
+        creates: /etc/docker/daemon.json
+      register: nvidia_runtime
+
+    - name: Find a large disk
+      ansible.builtin.include_tasks: tasks/large_disk.yml
+
+    - name: Choose Docker's data directory
+      ansible.builtin.shell: |
+        set -e
+        if [ "{{ bibr_docker_root }}" != "auto" ]; then echo "{{ bibr_docker_root }}"; exit 0; fi
+        if [ -z "{{ large_disk }}" ]; then echo /var/lib/docker; exit 0; fi
+        # keep the folder component version 0.1 used, so its images are reused
+        if [ -d "{{ large_disk }}/metacheck-docker" ]; then echo "{{ large_disk }}/metacheck-docker"; exit 0; fi
+        echo "{{ large_disk }}/docker"
+      register: docker_root_probe
+      changed_when: false
+
+    - name: Set Docker data directory
+      ansible.builtin.set_fact:
+        docker_data_root: "{{ docker_root_probe.stdout | trim }}"
+
+    - name: Check free space where Docker will build (needs about 90 GB)
+      ansible.builtin.shell: |
+        d="{{ docker_data_root }}"
+        while [ ! -d "$d" ]; do d=$(dirname "$d"); done
+        df -BG --output=avail "$d" | tail -1 | tr -dc '0-9'
+      register: docker_root_free
+      changed_when: false
+      failed_when: (docker_root_free.stdout | int) < 90
+
+    - name: Show Docker data directory
+      ansible.builtin.debug:
+        msg: "Docker images go to {{ docker_data_root }} ({{ docker_root_free.stdout }} GB free)"
+
+    - name: Point Docker at that directory
+      ansible.builtin.shell: |
+        set -e
+        tmp=$(mktemp)
+        # Docker 29 keeps images in the containerd store under /var/lib/containerd,
+        # which ignores data-root; the classic store keeps everything under data-root.
+        jq --arg root "{{ docker_data_root }}" '. + {"data-root": $root, "features": {"containerd-snapshotter": false}}' /etc/docker/daemon.json > "$tmp"
+        if ! cmp -s "$tmp" /etc/docker/daemon.json; then mv "$tmp" /etc/docker/daemon.json; echo changed; else rm -f "$tmp"; fi
+      register: daemon_json
+      changed_when: "'changed' in daemon_json.stdout"
+
+    - name: Create Docker's systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Make Docker wait for that disk at boot
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/docker.service.d/metacheck-data-root.conf
+        mode: "0644"
+        content: |
+          [Unit]
+          RequiresMountsFor={{ docker_data_root }}
+      register: docker_dropin
+      when: docker_data_root != '/var/lib/docker'
+
+    - name: Enable and (re)start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: "{{ 'restarted' if (docker_pkgs.changed or nvidia_runtime.changed or daemon_json.changed or docker_dropin.changed) else 'started' }}"
+        daemon_reload: true
+
+    # ------------------------------------------------------------------
+    # Ollama (after Docker, so it can listen on Docker's bridge address)
+    # ------------------------------------------------------------------
+    - name: Install Ollama and pull bibr's model
+      ansible.builtin.include_tasks: tasks/ollama.yml
+      vars:
+        ollama_model: "{{ bibr_llm_model }}"
+        ollama_context_length: "{{ bibr_ollama_context }}"
+      when: bibr_llm_provider == 'ollama'
+
+    # ------------------------------------------------------------------
+    # Where bibr listens
+    # ------------------------------------------------------------------
+    - name: Find this workspace's SRC private network address
+      ansible.builtin.shell: ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep '^10\.10\.10\.' | head -1 || true
+      register: private_ip_probe
+      changed_when: false
+
+    - name: Decide where bibr listens besides 127.0.0.1
+      ansible.builtin.set_fact:
+        bibr_extra_listen: "{{ ('' if bibr_listen == 'local' else (private_ip_probe.stdout | trim) if bibr_listen == 'auto' else bibr_listen) | trim }}"
+
+    - name: Show where bibr listens
+      ansible.builtin.debug:
+        msg: >-
+          bibr listens on 127.0.0.1:{{ bibr_port }}{{
+          (' and ' ~ bibr_extra_listen ~ ':' ~ bibr_port ~ ' (for metacheck workspaces: BIBR address http://' ~ bibr_extra_listen ~ ':' ~ bibr_port ~ ')')
+          if bibr_extra_listen | length > 0 else ' only (this workspace is not on an SRC private network)' }}
+
+    # ------------------------------------------------------------------
+    # bibr Compose stack (built and started in the background)
+    # ------------------------------------------------------------------
+    - name: Clone bibr at the pinned release
+      ansible.builtin.git:
+        repo: https://github.com/scienceverse/bibr.git
+        dest: "{{ bibr_dir }}"
+        version: "{{ bibr_ref }}"
+        depth: 1
+        force: true
+      register: bibr_git
+
+    # Only an update of an existing clone means new bibr code. A first clone
+    # needs no flag: missing images are built anyway, and existing ones (for
+    # example from component version 0.1) are reused.
+    - name: Flag a rebuild of the bibr images when the bibr source changed
+      ansible.builtin.file:
+        path: "{{ bibr_dir }}/.rebuild"
+        state: touch
+        mode: "0644"
+      when: bibr_git.changed and bibr_git.before is not none
+
+    - name: Write bibr environment file
+      ansible.builtin.template:
+        src: templates/bibr/bibr.env.j2
+        dest: "{{ bibr_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      register: bibr_env
+
+    - name: Write the Compose override (Ollama access, private network address)
+      ansible.builtin.template:
+        src: templates/bibr/docker-compose.override.yml.j2
+        dest: "{{ bibr_dir }}/docker-compose.override.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      register: bibr_override
+
+    - name: Install bibr stack start script
+      ansible.builtin.copy:
+        src: files/bibr/bibr-stack-up.sh
+        dest: "{{ bibr_component_dir }}/bin/bibr-stack-up.sh"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install bibr stack systemd service
+      ansible.builtin.template:
+        src: templates/bibr/bibr-stack.service.j2
+        dest: /etc/systemd/system/bibr-stack.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: bibr_service
+
+    - name: Start the bibr stack in the background
+      ansible.builtin.systemd:
+        name: bibr-stack
+        enabled: true
+        # A changed .env or override must reach the containers; the script only
+        # rebuilds what changed and then recreates the containers.
+        state: "{{ 'restarted' if (bibr_env.changed or bibr_override.changed or bibr_service.changed or bibr_git.changed) else 'started' }}"
+        daemon_reload: true
+        no_block: true
+      when: bibr_start | bool
+
+    # ------------------------------------------------------------------
+    # nginx (only when the SRC-Nginx component configured the workspace)
+    # ------------------------------------------------------------------
+    - name: Check for the SRC-Nginx location directory
+      ansible.builtin.stat:
+        path: /etc/nginx/app-location-conf.d
+      register: nginx_locations
+
+    - name: Install nginx locations for bibr
+      ansible.builtin.template:
+        src: templates/bibr/bibr-nginx.conf.j2
+        dest: /etc/nginx/app-location-conf.d/bibr.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: nginx_locations.stat.exists
+      register: bibr_nginx
+
+    # The metacheck component overwrites this when it is on the same workspace.
+    - name: Send the workspace root to bibr's API documentation (unless already set)
+      ansible.builtin.copy:
+        dest: /etc/nginx/app-location-conf.d/00-root.conf
+        force: false
+        mode: "0644"
+        content: |
+          # Managed by the scienceverse/surf-research-cloud components.
+          location = / {
+              return 302 /bibr/docs;
+          }
+      when: nginx_locations.stat.exists
+      register: root_nginx
+
+    # Public entrance: prepared always, switched on only with bibr_public
+    # (or later with `sudo bibr-public on`).
+    - name: Create the folder for the public entrance's nginx file
+      ansible.builtin.file:
+        path: "{{ bibr_component_dir }}/nginx"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: nginx_locations.stat.exists
+
+    - name: Prepare the public entrance (contains bibr's token, root only)
+      ansible.builtin.template:
+        src: templates/bibr/bibr-public-nginx.conf.j2
+        dest: "{{ bibr_component_dir }}/nginx/bibr-public.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      when: nginx_locations.stat.exists
+      no_log: true
+      register: public_conf
+
+    - name: Install the per-visitor limit for the public entrance
+      ansible.builtin.copy:
+        src: files/bibr/bibr-public-limit.conf
+        dest: /etc/nginx/conf.d/bibr-public-limit.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: nginx_locations.stat.exists
+      register: public_limit
+
+    - name: Install the switch `bibr-public on|off|status`
+      ansible.builtin.copy:
+        src: files/bibr/bibr-public
+        dest: /usr/local/sbin/bibr-public
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_locations.stat.exists
+
+    - name: Share the language model with metacheck workspaces on the private network
+      ansible.builtin.template:
+        src: templates/bibr/bibr-llm-share-nginx.conf.j2
+        dest: /etc/nginx/conf.d/bibr-llm-share.conf
+        owner: root
+        group: root
+        mode: "0600"
+      when: >-
+        nginx_locations.stat.exists and (bibr_share_llm | bool) and bibr_llm_provider == 'ollama'
+        and bibr_extra_listen.startswith('10.10.10.')
+      no_log: true
+      register: llm_share
+
+    - name: Show where metacheck finds the shared model
+      ansible.builtin.debug:
+        msg: "metacheck workspaces on the private network can use the model {{ bibr_llm_model }} at http://{{ bibr_extra_listen }}:{{ bibr_llm_share_port }}/v1 with bibr's token."
+      when: llm_share is not skipped
+
+    - name: Check and reload nginx
+      ansible.builtin.shell: nginx -t && systemctl reload nginx
+      when: nginx_locations.stat.exists and (bibr_nginx.changed or root_nginx.changed or public_limit.changed or (llm_share.changed | default(false)))
+
+    - name: Read whether the public entrance is open
+      ansible.builtin.command: /usr/local/sbin/bibr-public status
+      register: public_state
+      changed_when: false
+      when: nginx_locations.stat.exists
+
+    - name: Open or close the public entrance (bibr_public = {{ bibr_public }})
+      ansible.builtin.command: /usr/local/sbin/bibr-public {{ 'on' if bibr_public | bool else 'off' }}
+      when: >-
+        nginx_locations.stat.exists and (
+          (bibr_public | bool) != ('open' in public_state.stdout)
+          or ((bibr_public | bool) and public_conf.changed))
+
+    - name: Free disk space
+      ansible.builtin.include_tasks: tasks/cleanup.yml
+
+    - name: Update status file
+      ansible.builtin.lineinfile:
+        path: "{{ status_file }}"
+        line: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  bibr component: installed; the bibr stack builds and starts in the background (lines below)"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "bibr API on this workspace: http://127.0.0.1:{{ bibr_port }} (bearer token: sudo cat {{ bibr_secrets_dir }}/api_key)"
+          - "{{ ('For metacheck workspaces on the private network: http://' ~ bibr_extra_listen ~ ':' ~ bibr_port) if bibr_extra_listen | length > 0 else 'Not on an SRC private network: other workspaces cannot reach this bibr.' }}"
+          - "Build progress: /bibr-status on the workspace URL, or {{ status_file }}"

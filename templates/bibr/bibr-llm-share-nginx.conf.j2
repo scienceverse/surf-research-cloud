@@ -1,0 +1,31 @@
+# Managed by the bibr SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Lets metacheck workspaces on the SRC private network use this workspace's
+# language model (Ollama at {{ ollama_host }}:11434, which has no login of its
+# own), so a metacheck workspace needs no GPU.
+# - listens only on this workspace's private network address;
+# - requires bibr's token (Authorization: Bearer ..., as for bibr itself);
+# - passes on only the two OpenAI-compatible requests metacheck makes, so the
+#   model cannot be downloaded, replaced or deleted through it.
+# Contains the token: readable by root only.
+server {
+    listen {{ bibr_extra_listen }}:{{ bibr_llm_share_port }};
+    server_name _;
+    client_max_body_size 20m;
+
+    location = /v1/chat/completions {
+        if ($http_authorization != "Bearer {{ bibr_api_key_value }}") { return 401; }
+        proxy_pass http://{{ ollama_host }}:11434;
+        proxy_http_version 1.1;
+        proxy_read_timeout 600s;
+        proxy_buffering off;
+    }
+
+    location = /v1/models {
+        if ($http_authorization != "Bearer {{ bibr_api_key_value }}") { return 401; }
+        proxy_pass http://{{ ollama_host }}:11434;
+    }
+
+    location / {
+        return 404;
+    }
+}

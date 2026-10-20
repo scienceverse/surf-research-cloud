@@ -1,0 +1,128 @@
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Included from the SRC-Nginx server block (/etc/nginx/conf.d/tls_main.conf),
+# which already terminates TLS and defines /validate and @custom_401 for the
+# SRAM login. The progress page always requires that login; the website, the
+# app and the web interface only in the "login" variant. The workspace root
+# (/) shows the website, through 00-root.conf, which this component writes.
+
+# This file comes in two variants, made from the same template and kept in
+# /opt/metacheck-component/nginx/: "login" (SRAM login for the app) and
+# "public" (the app open to anyone). `sudo metacheck-public on|off` copies the
+# chosen one to /etc/nginx/app-location-conf.d/metacheck.conf.
+# This is the {{ 'PUBLIC' if (metacheck_nginx_public | bool) else 'LOGIN' }} variant.
+
+# The website (site/: one static page that uses the web interface below).
+# The workspace root (/) shows it, through 00-root.conf.
+location /site/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone (static files only; uploads go to /api/).
+{% else %}
+    error_page 401 = @custom_401;
+    auth_request /validate;
+{% endif %}
+    alias {{ metacheck_component_dir }}/site/;
+    index index.html;
+    add_header Cache-Control "no-cache";
+}
+
+# metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
+location /metacheck/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone. Per-visitor limit on POST requests (file uploads and
+    # Shiny's fallback transport), zone defined in
+    # /etc/nginx/conf.d/metacheck-public-limit.conf. The app itself runs at
+    # most 4 reports at once and makes each session wait between reports.
+    limit_req zone=metacheck_public burst=40 nodelay;
+    limit_req_status 429;
+{% else %}
+    error_page 401 = @custom_401;
+    auth_request /validate;
+    auth_request_set $username $upstream_http_username;
+    proxy_set_header X-SRC-Auth-Username $username;
+{% endif %}
+
+    proxy_pass http://127.0.0.1:{{ metacheck_shiny_port }}/metacheck/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Shiny keeps a websocket open for the whole session.
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+    client_max_body_size {{ metacheck_max_upload }};
+}
+
+# metacheck's web interface (api/api.R, plumber on port {{ metacheck_api_port }}):
+# PDF or bibr JSON in, report out. Interactive documentation at /api/__docs__/.
+location /api/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone. Every request occupies the server for seconds to
+    # minutes, so uploads are limited more strictly than in the app
+    # (zone metacheck_api, /etc/nginx/conf.d/metacheck-public-limit.conf).
+    limit_req zone=metacheck_api burst=6 nodelay;
+    limit_req_status 429;
+    error_page 429 = @metacheck_api_429;
+
+    # Web pages on any website, or opened from disk (such as the TU/e data
+    # manager check's page), may use the interface: it is open to anyone
+    # already, and no login or cookie is involved. A browser first asks
+    # (OPTIONS) before an upload that reports its progress.
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type" always;
+        add_header Access-Control-Max-Age 86400 always;
+        return 204;
+    }
+    add_header Access-Control-Allow-Origin "*" always;
+{% else %}
+    error_page 401 = @custom_401;
+    auth_request /validate;
+{% endif %}
+
+    proxy_pass http://127.0.0.1:{{ metacheck_api_port }}/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # so job links in the answers include /api
+    proxy_set_header X-Forwarded-Prefix /api;
+    # one-call requests wait for their job; a report can take minutes
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 1800s;
+    proxy_request_buffering on;
+    # PDFs up to 50 MB, .zip files of data and code folders up to 500 MB
+    # (api.R checks each limit)
+    client_max_body_size 505M;
+    error_page 413 = @metacheck_api_413;
+}
+
+# Uploads over the size limit, answered as JSON like the interface's own errors.
+location @metacheck_api_413 {
+    default_type application/json;
+{% if metacheck_nginx_public | bool %}
+    add_header Access-Control-Allow-Origin "*" always;
+{% endif %}
+    return 413 '{"error":"The file is too large: PDFs and bibr JSON may be at most 50 MB, .zip files of data and code folders at most 500 MB."}';
+}
+
+{% if metacheck_nginx_public | bool %}
+# The refusal above as JSON, so programs and web pages can show the message.
+location @metacheck_api_429 {
+    default_type application/json;
+    add_header Access-Control-Allow-Origin "*" always;
+    return 429 '{"error":"Too many uploads from your address. Wait a minute and try again."}';
+}
+
+{% endif %}
+# Installation progress of the metacheck component (plain text).
+location = /metacheck-status {
+    error_page 401 = @custom_401;
+    auth_request /validate;
+    alias {{ metacheck_log_dir }}/status.txt;
+    default_type text/plain;
+}

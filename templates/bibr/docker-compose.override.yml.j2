@@ -1,0 +1,14 @@
+# Managed by the bibr SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Loaded automatically next to bibr's docker-compose.yml.
+services:
+  bibr-serve:
+    # host.docker.internal = the workspace's Docker bridge address, where
+    # Ollama listens (tasks/ollama.yml).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+{% if bibr_extra_listen | length > 0 %}
+    # Also reachable for other workspaces on the SRC private network
+    # (10.10.10.0/24); every request still needs bibr's bearer token.
+    ports:
+      - "{{ bibr_extra_listen }}:{{ bibr_port }}:8000"
+{% endif %}

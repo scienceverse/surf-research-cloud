@@ -6,7 +6,8 @@
 ## version 0.3.3.8). Differences from that app, all switched on by environment
 ## variables that the SURF Research Cloud component writes to ~/.Renviron of
 ## the shiny user, so without them the app behaves exactly like the original:
-##   * BIBR_API_URL / BIBR_API_KEY: "Use bibr on this server" is offered first
+##   * BIBR_API_URL / BIBR_API_KEY (/ BIBR_REMOTE): "Use bibr on this server",
+##     or the collaboration's bibr server on the SRC private network, is offered first
 ##     and preselected; PDFs are converted by the workspace's own bibr through
 ##     bibr_client.R.
 ##   * OLLAMA_BASE_URL / METACHECK_LLM_MODEL: "This server (local model)" is
@@ -260,6 +261,13 @@ GROBID_SERVERS <- list(
 # offered first, and preselected, when BIBR_API_URL is set; the report process
 # inherits BIBR_API_KEY, which convert_bibr() sends as the bearer token.
 BIBR_URL <- Sys.getenv("BIBR_API_URL")
+# TRUE when bibr runs on another workspace of the SRC private network.
+BIBR_REMOTE <- identical(tolower(Sys.getenv("BIBR_REMOTE")), "true")
+BIBR_LABEL <- if (BIBR_REMOTE) {
+  "Use the bibr server of this research collaboration (SURF Research Cloud, private network)"
+} else {
+  "Use bibr on this server (the PDF is converted here)"
+}
 CONVERTERS <- c(
   if (nzchar(BIBR_URL)) {
     list(bibr = list(method = "bibr", backend = "selfhosted", api_url = BIBR_URL))
@@ -273,7 +281,7 @@ DEFAULT_CONVERTER <- if (nzchar(BIBR_URL)) "bibr" else "metacheck"
 # raised as usual and shown to the user through explain_error(). Returns
 # list(htmlpath, crossref_skipped).
 paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
-                      use_llm, llm_model, htmlpath) {
+                      use_llm, llm_model, htmlpath, pdf_name = basename(pdf_path)) {
   suppressPackageStartupMessages(library(metacheck))
   source("render_report.R")
   source("shiny_progress.R")
@@ -301,7 +309,11 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
   # The local bibr is called by this app's own client (bibr_client.R).
   if (identical(convert_args$method, "bibr")) {
     source("bibr_client.R")
-    json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url)
+    # bibr completes the references through Crossref only when the visitor
+    # ticked "Query CrossRef" (which sends the reference list to Crossref).
+    # pdf_name: the uploaded file's own name (Shiny saves it as 0.pdf)
+    json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url,
+                         crossref = isTRUE(use_crossref), file_name = pdf_name)
   } else {
     json <- do.call(metacheck::convert,
                     c(list(pdf_path, tmp, crossref_lookup = FALSE), convert_args))
@@ -321,6 +333,13 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     bibr_read(json)   # bibr_client.R: read(), with a fallback for older metacheck
   } else {
     metacheck::read(json)
+  }
+  # A missing title (NA) makes metacheck's report() replace its whole header
+  # with "NA": no styling, not self-contained (metacheck #497). Until that is
+  # fixed, give the report a visible placeholder instead.
+  ttl <- tryCatch(paper$info$title, error = function(e) NULL)
+  if (is.null(ttl) || length(ttl) == 0 || is.na(ttl[1]) || !nzchar(trimws(ttl[1]))) {
+    paper$info$title <- "(no title found in the PDF)"
   }
 
   # An empty/near-empty conversion reads OK but yields no usable text, so
@@ -405,7 +424,8 @@ LLM_DEFAULT_PROVIDER <- "mistral"
 if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
   LLM_PROVIDERS <- c(list(local = list(
-    label    = "This server (local model)",
+    label    = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true"))
+      "The bibr server's model (SURF private network)" else "This server (local model)",
     # Through metacheck's OpenAI-compatible ("vllm") route to Ollama's /v1
     # address: only that route switches off Qwen's reasoning step for
     # structured calls. Via "ollama/..." every power extraction ran out of
@@ -414,7 +434,10 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     key_env  = "OLLAMA_BASE_URL",
     keys_url = "",
     region   = "local",
-    privacy  = paste0(
+    privacy  = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true")) paste0(
+      "The model runs on the bibr server in the same SURF project, reached over ",
+      "SURF's private network, so the paragraphs are not sent to an external provider."
+    ) else paste0(
       "The model runs on this server, so the paragraphs are not sent to an ",
       "external provider."
     )
@@ -502,7 +525,7 @@ options_tab <- tabItem(
     radioButtons(
       "grobid_server_choice", "PDF Conversion Server:",
       choiceNames = c(
-        if (nzchar(BIBR_URL)) list("Use bibr on this server (the PDF is converted here)"),
+        if (nzchar(BIBR_URL)) list(BIBR_LABEL),
         list(
           "Use GDPR compliant GROBID server at Eindhoven University of Technology",
           "Use Full GROBID via HuggingFace (USA)"
@@ -662,7 +685,11 @@ server <- function(input, output, session) {
     grobid       <- input$grobid_server_choice %||% DEFAULT_CONVERTER
 
     grobid_use_text <- switch(grobid,
-      "bibr"        = "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef.",
+      "bibr"        = if (BIBR_REMOTE) {
+        "\U0001F512 The PDF file is converted with bibr on another server of this research collaboration, over SURF Research Cloud's private network. Reference lists are looked up in CrossRef."
+      } else {
+        "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef."
+      },
       "metacheck"   = "\U0001F6E1️ The PDF file is converted using a GDPR compliant server at Eindhoven University of Technology.",
       "huggingface" = "\U0001F310 The PDF file is converted using an external server (HuggingFace, USA).",
       "The PDF file is converted using an external server."
@@ -797,7 +824,7 @@ server <- function(input, output, session) {
     # The report itself is made in its own R process (paper_job(), via
     # background_job.R), so this app stays responsive for other visitors.
     job <- bg_start(paper_job, list(
-      pdf_path = files$datapath, tmp = tmp,
+      pdf_path = files$datapath, pdf_name = files$name, tmp = tmp,
       convert_args = CONVERTERS[[input$grobid_server_choice %||% DEFAULT_CONVERTER]],
       use_crossref = use_crossref, modules = modules,
       use_llm = use_llm, llm_model = prov$model, htmlpath = htmlpath

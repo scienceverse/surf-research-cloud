@@ -1,0 +1,330 @@
+#!/usr/bin/python3 -I
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+#
+# metacheck-sandbox: the only way the web interface's jobs can use Docker.
+#
+# metacheck's reproducibility check runs a paper's R and Python code in Docker
+# containers (reproducibility_check(execute = TRUE, sandbox = "docker")). The
+# shiny user, which runs the public web interface, is NOT in the docker group
+# (that would make it equal to root). Instead its jobs find a `docker` command
+# (sandbox-bin/docker) that calls this program through sudo, and this program
+# lets through only what metacheck's sandbox needs:
+#
+#   docker info                      (metacheck checks that Docker answers)
+#   docker run ...                   only metacheck's locked-down container:
+#       no network, read-only system, no capabilities, no new privileges,
+#       user 1000:1000 (remapped to an unused host id by Docker's userns-remap),
+#       limited processes, processors, memory and file sizes, the job's own
+#       sandbox folder as the only writable mount, one of the allowed images,
+#       running Rscript or python on a file in /sandbox. Every other option is
+#       refused, and the command is rebuilt here from the checked parts.
+#   docker stop --time N repro_...   only a container of the same job
+#
+# and, for the web interface and a timer:
+#
+#   metacheck-sandbox cleanup JOB    stop a job's containers, delete its sandbox folder
+#   metacheck-sandbox reap           stop containers running longer than allowed,
+#                                    delete sandbox folders of finished jobs
+#
+# Every decision is logged (journalctl -t metacheck-sandbox).
+
+import calendar
+import os
+import re
+import shutil
+import subprocess
+import sys
+import syslog
+import time
+
+DOCKER = "/usr/bin/docker"
+SANDBOX_ROOT = "/srv/metacheck-sandbox"     # size-limited file system (loop device)
+MAX_CPUS = 4.0
+MAX_MEMORY_MB = 16 * 1024
+MAX_PIDS = 512
+TMPFS = "/tmp:rw,nosuid,nodev,noexec,size=2g"
+MAX_FILE_BYTES = 10 * 1024 ** 3               # largest single file a script may write
+MAX_CONTAINER_MINUTES = 45                    # reap: containers older than this are stopped
+MAX_SANDBOX_HOURS = 3                         # reap: sandbox folders older than this are deleted
+
+# The images metacheck asks for -> the image that is run. metacheck's
+# reproducibility check always asks for the small Python image; this server
+# keeps the large one (everything in the small one, plus about 70 packages and
+# CPU-only torch and tensorflow), so that request is served by the large image.
+IMAGES = {
+    "ghcr.io/scienceverse/metacheck_r_large:latest": "ghcr.io/scienceverse/metacheck_r_large:latest",
+    "ghcr.io/scienceverse/metacheck_py_large:latest": "ghcr.io/scienceverse/metacheck_py_large:latest",
+    "ghcr.io/scienceverse/metacheck_py_small:latest": "ghcr.io/scienceverse/metacheck_py_large:latest",
+}
+COMMANDS = {"Rscript", "python"}
+MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "ro", "/pylib": "ro"}
+
+JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+NAME_RE = re.compile(r"^repro_[A-Za-z0-9_.-]{1,100}$")
+MEMORY_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([gGmM])$")
+
+
+def log(msg):
+    syslog.openlog("metacheck-sandbox")
+    syslog.syslog(syslog.LOG_INFO, msg[:2000])
+
+
+def refuse(job, why):
+    log("refused job=%s: %s" % (job, why))
+    sys.stderr.write("metacheck-sandbox: refused: %s\n" % why)
+    sys.exit(125)
+
+
+def job_dir(job):
+    return os.path.join(SANDBOX_ROOT, job)
+
+
+def inside(path, root):
+    """True if `path` (resolved, no symbolic links left) lies inside `root`."""
+    real = os.path.realpath(path)
+    root = os.path.realpath(root)
+    return real == root or real.startswith(root + os.sep)
+
+
+# ---- docker run -----------------------------------------------------------------
+
+def check_run(job, args):
+    """Checks `docker run` arguments as metacheck builds them; returns the
+    command to run, rebuilt from the checked parts."""
+    i = 0
+    seen = {}
+    mounts = {}
+    env = []
+
+    def value(opt):
+        nonlocal i
+        if i + 1 >= len(args):
+            refuse(job, "%s without a value" % opt)
+        i += 1
+        return args[i]
+
+    while i < len(args):
+        a = args[i]
+        if not a.startswith("-"):
+            break
+        if "=" in a:
+            refuse(job, "option written as %r (only separate values are accepted)" % a)
+        if a in ("--rm", "--read-only"):
+            seen[a] = True
+        elif a == "--name":
+            v = value(a)
+            if not NAME_RE.match(v):
+                refuse(job, "container name %r" % v)
+            seen[a] = v
+        elif a == "--network":
+            v = value(a)
+            if v != "none":
+                refuse(job, "network %r" % v)
+            seen[a] = v
+        elif a == "--tmpfs":
+            v = value(a)
+            if v != "/tmp":
+                refuse(job, "tmpfs %r" % v)
+            seen[a] = v
+        elif a == "--user":
+            v = value(a)
+            if v != "1000:1000":
+                refuse(job, "user %r" % v)
+            seen[a] = v
+        elif a == "--cap-drop":
+            v = value(a)
+            if v != "ALL":
+                refuse(job, "cap-drop %r" % v)
+            seen[a] = v
+        elif a == "--security-opt":
+            v = value(a)
+            if v != "no-new-privileges":
+                refuse(job, "security option %r" % v)
+            seen[a] = v
+        elif a == "--pids-limit":
+            v = value(a)
+            if not v.isdigit() or not (1 <= int(v) <= MAX_PIDS):
+                refuse(job, "pids-limit %r" % v)
+            seen[a] = int(v)
+        elif a == "--cpus":
+            v = value(a)
+            try:
+                c = float(v)
+            except ValueError:
+                refuse(job, "cpus %r" % v)
+            if not (0 < c):
+                refuse(job, "cpus %r" % v)
+            seen[a] = min(c, MAX_CPUS)
+        elif a == "--memory":
+            v = value(a)
+            m = MEMORY_RE.match(v)
+            if not m:
+                refuse(job, "memory %r" % v)
+            mb = float(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)
+            seen[a] = int(min(mb, MAX_MEMORY_MB))
+        elif a == "-w":
+            v = value(a)
+            if v != "/sandbox":
+                refuse(job, "working directory %r" % v)
+            seen[a] = v
+        elif a == "-e":
+            v = value(a)
+            if v != "PYTHONPATH=/pylib":
+                refuse(job, "environment variable %r" % v)
+            env.append(v)
+        elif a == "-v":
+            v = value(a)
+            parts = v.split(":")
+            if len(parts) == 2:
+                src, target, mode = parts[0], parts[1], "rw"
+            elif len(parts) == 3:
+                src, target, mode = parts
+            else:
+                refuse(job, "mount %r" % v)
+            if target not in MOUNT_TARGETS or MOUNT_TARGETS[target] != mode or target in mounts:
+                refuse(job, "mount %r" % v)
+            if not os.path.isabs(src) or not os.path.isdir(src):
+                refuse(job, "mount source %r is not a folder" % src)
+            if not inside(src, job_dir(job)):
+                refuse(job, "mount source %r is outside the job's sandbox folder" % src)
+            mounts[target] = (os.path.realpath(src), mode)
+        else:
+            refuse(job, "option %r" % a)
+        i += 1
+
+    rest = args[i:]
+    required = {"--rm": True, "--read-only": True, "--network": "none", "--tmpfs": "/tmp",
+                "--user": "1000:1000", "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
+                "--name": None, "--pids-limit": None, "-w": "/sandbox"}
+    for k, want in required.items():
+        if k not in seen or (want is not None and seen[k] != want):
+            refuse(job, "required option %s missing" % k)
+    if "/sandbox" not in mounts:
+        refuse(job, "no /sandbox mount")
+    if len(rest) != 3:
+        refuse(job, "expected an image, a command and one file, got %r" % rest)
+    image, command, script = rest
+    if image not in IMAGES:
+        refuse(job, "image %r" % image)
+    if command not in COMMANDS:
+        refuse(job, "command %r" % command)
+    if not script.startswith("/sandbox/") or ".." in script.split("/") or script.startswith("/sandbox/-"):
+        refuse(job, "script %r" % script)
+
+    memory = seen.get("--memory", MAX_MEMORY_MB)
+    cmd = [DOCKER, "run", "--rm", "--pull", "never",
+           "--name", seen["--name"],
+           "--label", "metacheck-sandbox=1", "--label", "metacheck-job=%s" % job,
+           "--hostname", "sandbox",
+           "--network", "none",
+           "--read-only", "--tmpfs", TMPFS,
+           "--user", "1000:1000",
+           "--cap-drop", "ALL",
+           "--security-opt", "no-new-privileges",
+           "--pids-limit", str(min(seen["--pids-limit"], MAX_PIDS)),
+           "--cpus", "%g" % seen.get("--cpus", MAX_CPUS),
+           "--memory", "%dm" % memory, "--memory-swap", "%dm" % memory,
+           "--ulimit", "core=0", "--ulimit", "fsize=%d" % MAX_FILE_BYTES,
+           "-w", "/sandbox"]
+    for target, (src, mode) in sorted(mounts.items()):
+        cmd += ["-v", "%s:%s:%s" % (src, target, mode)]
+    for e in env:
+        cmd += ["-e", e]
+    cmd += [IMAGES[image], command, script]
+    return cmd
+
+
+# ---- cleanup and reap -----------------------------------------------------------
+
+def containers(label):
+    out = subprocess.run([DOCKER, "ps", "-q", "--filter", "label=%s" % label],
+                         capture_output=True, text=True, timeout=60).stdout.split()
+    return out
+
+
+def stop_all(ids):
+    if ids:
+        subprocess.run([DOCKER, "stop", "--time", "5"] + ids, capture_output=True, timeout=120)
+
+
+def remove_dir(job):
+    d = job_dir(job)
+    if os.path.islink(d) or not os.path.isdir(d):
+        return
+    if os.path.dirname(os.path.realpath(d)) != os.path.realpath(SANDBOX_ROOT):
+        return
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def cleanup(job):
+    stop_all(containers("metacheck-job=%s" % job))
+    remove_dir(job)
+    log("cleanup job=%s" % job)
+
+
+def reap():
+    now = time.time()
+    stopped = []
+    for cid in containers("metacheck-sandbox=1"):
+        started = subprocess.run([DOCKER, "inspect", "--format", "{{.State.StartedAt}}", cid],
+                                 capture_output=True, text=True, timeout=60).stdout.strip()
+        try:
+            t = calendar.timegm(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S"))  # Docker gives UTC
+        except ValueError:
+            continue
+        if now - t > MAX_CONTAINER_MINUTES * 60:
+            stopped.append(cid)
+    stop_all(stopped)
+    removed = 0
+    running_jobs = set()
+    for cid in containers("metacheck-sandbox=1"):
+        running_jobs.add(subprocess.run([DOCKER, "inspect", "--format", '{{index .Config.Labels "metacheck-job"}}', cid],
+                                        capture_output=True, text=True, timeout=60).stdout.strip())
+    for name in os.listdir(SANDBOX_ROOT):
+        if JOB_RE.match(name) and name not in running_jobs:
+            if now - os.path.getmtime(job_dir(name)) > MAX_SANDBOX_HOURS * 3600:
+                remove_dir(name)
+                removed += 1
+    if stopped or removed:
+        log("reap: stopped %d containers, removed %d sandbox folders" % (len(stopped), removed))
+
+
+# ---- main -------------------------------------------------------------------------
+
+def main(argv):
+    if os.geteuid() != 0:
+        sys.stderr.write("metacheck-sandbox: must run as root (through sudo)\n")
+        return 1
+    if len(argv) >= 1 and argv[0] == "reap":
+        reap()
+        return 0
+    if len(argv) == 2 and argv[0] == "cleanup":
+        if not JOB_RE.match(argv[1]):
+            refuse(argv[1], "job id")
+        cleanup(argv[1])
+        return 0
+    if len(argv) >= 3 and argv[0] == "--job" and argv[2] == "docker":
+        job = argv[1]
+        if not JOB_RE.match(job):
+            refuse(job, "job id")
+        args = argv[3:]
+        if args == ["info"]:
+            os.execv(DOCKER, [DOCKER, "info"])
+        if len(args) == 4 and args[0] == "stop" and args[1] == "--time" and args[2].isdigit() and NAME_RE.match(args[3]):
+            label = subprocess.run([DOCKER, "inspect", "--format", '{{index .Config.Labels "metacheck-job"}}', args[3]],
+                                   capture_output=True, text=True, timeout=60).stdout.strip()
+            if label != job:
+                refuse(job, "stop of a container of another job")
+            log("stop job=%s %s" % (job, args[3]))
+            os.execv(DOCKER, [DOCKER, "stop", "--time", args[2], args[3]])
+        if args and args[0] == "run":
+            cmd = check_run(job, args[1:])
+            log("run job=%s: %s" % (job, " ".join(cmd[1:])))
+            os.execv(DOCKER, cmd)
+        refuse(job, "docker %s" % " ".join(args[:3]))
+    sys.stderr.write("usage: metacheck-sandbox --job JOB docker ... | cleanup JOB | reap\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

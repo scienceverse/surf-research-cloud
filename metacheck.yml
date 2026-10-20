@@ -1,58 +1,82 @@
 ---
 # metacheck on SURF Research Cloud
 #
-# Installs, on one GPU workspace:
-#   * bibr serve + GLM-OCR + Redis (Docker Compose, from the bibr repository)
-#   * R, Shiny Server and the metacheck package, with the paper report app
+# Installs on one workspace:
+#   * R, Quarto, Shiny Server and metacheck (dev), with the component's own
+#     edition of the paper report app (app/)
+#   * optionally Ollama with a local model for the app's LLM power check
+#     (only on a workspace with an NVIDIA GPU)
 #   * nginx locations behind the SRAM login (only when SRC-Nginx is present)
+#
+# PDFs are converted by a bibr server: the one on this workspace when the bibr
+# component ran first, or one on another workspace on the same SRC private
+# network (metacheck_bibr_url + metacheck_bibr_api_key). Without bibr the app
+# uses the GROBID servers it lists.
 #
 # SRC runs this as root on the workspace itself:
 #   ansible-playbook --connection=local -i localhost, -b --extra-vars="<parameters>" metacheck.yml
-#
-# Everything slow enough to exceed SRC's component time limit (building the
-# bibr images, downloading the OCR model) runs in the background through the
-# bibr-stack systemd service; progress is written to /var/log/metacheck/status.txt.
 
-- name: metacheck + bibr on a SURF Research Cloud GPU workspace
+- name: metacheck paper report app on a SURF Research Cloud workspace
   hosts: localhost
   gather_facts: false
   become: true
 
   vars:
-    # ---- component parameters (all strings; SRC does not allow empty values,
-    # so "none" means "not set"). Values passed by SRC as extra variables
-    # override these defaults. ----
-    metacheck_google_api_key: "none"
-    metacheck_anthropic_api_key: "none"
-    metacheck_openai_api_key: "none"
-    # "ollama" runs a local model on the workspace GPU (no data leaves it);
-    # "google", "anthropic" or "openai" use a cloud model with the key below.
-    metacheck_llm_provider: "ollama"
-    # Model for the chosen provider; for ollama this is the tag that is pulled.
-    # A 4B model fits next to the OCR server on a 24 GB card.
-    metacheck_llm_model: "qwen3.5:4b"
-    metacheck_crossref_email: "none"
-    metacheck_bibr_ref: "v0.7.3"
-    metacheck_metacheck_repo: "scienceverse/metacheck"
+    # ---- component parameters (strings; "none" = not set, "auto" = decide) ----
+    metacheck_repo: "scienceverse/metacheck"
     # dev is where metacheck is developed; main lags months behind.
-    metacheck_metacheck_ref: "dev"
-    metacheck_ocr_mem_fraction: "0.60"
+    metacheck_ref: "dev"
+    # Modules to install from GitHub (metacheck::module_install(), metacheck
+    # 0.4.0.1 or later), "owner/repo", separated by commas or spaces; "none" =
+    # none. The web interface's repository check can run each on an uploaded
+    # .zip (modules=<name>); nobody can install a module through it.
+    metacheck_modules: "Lakens/tue_datamanager_check"
+    # "auto" = the bibr on this workspace if the bibr component ran first,
+    # else none; "none" = no bibr; or a bibr address on the SRC private
+    # network, such as http://10.10.10.12:8000
+    metacheck_bibr_url: "auto"
+    # bibr's token; needed with an explicit metacheck_bibr_url
+    metacheck_bibr_api_key: "none"
+    # The language model for the LLM power check:
+    # "ollama" = a local model when this workspace has a GPU, otherwise the
+    #   model of the bibr workspace on the private network (bibr.yml,
+    #   bibr_share_llm), so this workspace needs no GPU;
+    # "bibr" = always the bibr workspace's model; "none" = no model (the
+    #   app's cloud providers below are still possible).
+    # metacheck_llm_model must be the model that workspace serves.
+    metacheck_llm: "ollama"
+    metacheck_llm_model: "qwen3.5:4b"
+    metacheck_ollama_context: "16384"
+    metacheck_mistral_api_key: "none"
+    metacheck_groq_api_key: "none"
     metacheck_max_upload: "100M"
-    metacheck_start_bibr: "true"
-    # Where Docker keeps images (the OCR image alone is 17 GB; building needs
-    # about 90 GB). "auto" = first mounted SRC storage volume under /data,
-    # else the ephemeral /mnt/scratch disk, else the boot disk.
-    metacheck_docker_root: "auto"
+    # "true" = the app is open to anyone, without the SRAM login; "false" =
+    # SRAM login. Can be changed later with `sudo metacheck-public on|off`.
+    metacheck_public: "false"
 
     # ---- fixed settings ----
+    component_label: "metacheck component"
+    # Run the R and Python code of uploaded repositories (metacheck's
+    # reproducibility check) in a locked-down Docker sandbox (tasks/sandbox.yml).
+    # Skipped when bibr runs on the same workspace (its containers need other
+    # Docker settings).
+    metacheck_run_code: "true"
+    metacheck_sandbox_size: "60G"
+    metacheck_sandbox_images:
+      - ghcr.io/scienceverse/metacheck_r_large:latest
+      - ghcr.io/scienceverse/metacheck_py_large:latest
+
     metacheck_shiny_port: 3838
-    metacheck_bibr_port: 8000
-    metacheck_root: /opt/metacheck
-    metacheck_bibr_dir: /opt/metacheck/bibr
-    metacheck_secrets_dir: /etc/metacheck
+    metacheck_api_port: 2005
+    metacheck_component_dir: /opt/metacheck-component
+    # installed modules (METACHECK_MODULES_DIR), readable by the shiny user
+    metacheck_modules_dir: /opt/metacheck-component/modules
+    metacheck_log_dir: /var/log/metacheck
+    status_dir: /var/log/metacheck
+    status_file: /var/log/metacheck/status.txt
+    bibr_local_key_file: /etc/bibr/api_key
     shiny_server_deb: https://download3.rstudio.org/ubuntu-20.04/x86_64/shiny-server-1.5.23.1030-amd64.deb
     quarto_version: "1.10.19"
-    # CRAN packages metacheck and its app need, installed as Ubuntu binaries (r2u).
     r_packages:
       - r-cran-remotes
       - r-cran-shiny
@@ -99,346 +123,151 @@
       - r-cran-rsqlite
       - r-cran-zip
       - r-cran-digest
+      # the web interface (api/): plumber and what metacheck's API helpers use
+      - r-cran-plumber
+      - r-cran-logger
+      - r-cran-uuid
+      - r-cran-mime
+      - r-cran-webutils
+      - r-cran-swagger
+
 
   tasks:
-    - name: Wait for system to become reachable
-      ansible.builtin.wait_for_connection:
-        timeout: 300
+    - name: Shared first steps
+      ansible.builtin.include_tasks: tasks/base.yml
 
-    - name: Gather facts
-      ansible.builtin.setup:
-
-    - name: Refuse anything but Ubuntu 22.04
-      ansible.builtin.assert:
-        that:
-          - ansible_distribution == "Ubuntu"
-          - ansible_distribution_version == "22.04"
-        fail_msg: "This component is built for the 'Ubuntu 2204 with CUDA' catalog item."
-
-    - name: Check that an NVIDIA GPU is present
-      ansible.builtin.command: nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-      register: gpu_info
-      changed_when: false
-
-    - name: Show the GPU
-      ansible.builtin.debug:
-        msg: "GPU: {{ gpu_info.stdout }}"
-
-    # ------------------------------------------------------------------
-    # Directories and secrets
-    # ------------------------------------------------------------------
-    - name: Create directories
+    - name: Create the component directory
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ metacheck_component_dir }}/bin"
         state: directory
         owner: root
         group: root
         mode: "0755"
-      loop:
-        - "{{ metacheck_root }}"
-        - "{{ metacheck_root }}/bin"
-        - /var/log/metacheck
 
-    - name: Create secrets directory
-      ansible.builtin.file:
-        path: "{{ metacheck_secrets_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0700"
+    # ------------------------------------------------------------------
+    # Which bibr to use
+    # ------------------------------------------------------------------
+    - name: Look for a bibr on this workspace
+      ansible.builtin.stat:
+        path: "{{ bibr_local_key_file }}"
+      register: bibr_local_key
 
-    - name: Generate secrets once (bibr bearer token, OCR token, Redis password)
-      ansible.builtin.shell: openssl rand -hex 32 > {{ metacheck_secrets_dir }}/{{ item }} && chmod 0600 {{ metacheck_secrets_dir }}/{{ item }}
-      args:
-        creates: "{{ metacheck_secrets_dir }}/{{ item }}"
-      loop:
-        - bibr_api_key
-        - ocr_api_key
-        - redis_password
-
-    - name: Read secrets
+    - name: Read the local bibr token
       ansible.builtin.slurp:
-        src: "{{ metacheck_secrets_dir }}/{{ item }}"
-      loop:
-        - bibr_api_key
-        - ocr_api_key
-        - redis_password
-      register: secret_files
+        src: "{{ bibr_local_key_file }}"
+      register: bibr_local_key_content
+      when: metacheck_bibr_url == 'auto' and bibr_local_key.stat.exists
       no_log: true
 
-    - name: Set secret facts
+    # An easy mistake in the portal, where the token's row comes first.
+    - name: Check that the bibr address and token are not swapped
+      ansible.builtin.assert:
+        that:
+          - not (metacheck_bibr_api_key is regex('^https?://') and metacheck_bibr_url is not regex('^https?://'))
+        fail_msg: >-
+          The bibr address and token are swapped: metacheck_bibr_url must be the
+          address (such as http://10.10.10.12:8000) and metacheck_bibr_api_key the
+          token. Correct them in the catalog item's parameters.
+        quiet: true
+
+    - name: Check the bibr settings
+      ansible.builtin.assert:
+        that:
+          - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_url is regex('^https?://')
+          - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_api_key != 'none'
+        fail_msg: >-
+          metacheck_bibr_url must be auto, none, or an address such as
+          http://10.10.10.12:8000, and an address needs metacheck_bibr_api_key
+          (on the bibr workspace: sudo cat /etc/bibr/api_key).
+
+    - name: Decide which bibr the app uses
       ansible.builtin.set_fact:
-        metacheck_bibr_api_key: "{{ (secret_files.results[0].content | b64decode) | trim }}"
-        metacheck_ocr_api_key: "{{ (secret_files.results[1].content | b64decode) | trim }}"
-        metacheck_redis_password: "{{ (secret_files.results[2].content | b64decode) | trim }}"
+        metacheck_bibr_url_value: "{{ (('http://127.0.0.1:8000' if bibr_local_key.stat.exists else '') if metacheck_bibr_url == 'auto' else ('' if metacheck_bibr_url == 'none' else metacheck_bibr_url)) | trim | regex_replace('/+$', '') }}"
+        metacheck_bibr_key_value: "{{ (((bibr_local_key_content.content | b64decode) if bibr_local_key.stat.exists else '') if metacheck_bibr_url == 'auto' else ('' if metacheck_bibr_url == 'none' else metacheck_bibr_api_key)) | trim }}"
+        metacheck_bibr_remote: "{{ metacheck_bibr_url not in ['auto', 'none'] }}"
       no_log: true
 
-    - name: Write status file
-      ansible.builtin.copy:
-        dest: /var/log/metacheck/status.txt
-        content: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  component: installing system packages\n"
-        mode: "0644"
+    - name: Check that bibr answers (it may still be starting)
+      ansible.builtin.uri:
+        url: "{{ metacheck_bibr_url_value }}/ready"
+        timeout: 10
+      register: bibr_ready
+      failed_when: false
+      when: metacheck_bibr_url_value | length > 0
+
+    - name: Report the bibr connection
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'No bibr: the app offers the GROBID servers only.' if metacheck_bibr_url_value | length == 0
+             else ('bibr at ' ~ metacheck_bibr_url_value ~ ': '
+                   ~ ('ready' if (bibr_ready.status | default(0)) == 200
+                      else 'not answering yet (status ' ~ (bibr_ready.status | default('none')) ~ '); the app shows a warning until it does')) }}
 
     # ------------------------------------------------------------------
-    # Base packages
+    # Local language model (Ollama), only with a GPU
     # ------------------------------------------------------------------
-    - name: Install base packages
+    - name: Decide on the local model
+      ansible.builtin.set_fact:
+        metacheck_local_llm: "{{ metacheck_llm == 'ollama' and (has_gpu | bool) }}"
+        # the bibr workspace's model, through its private network address
+        metacheck_shared_llm: >-
+          {{ (metacheck_llm == 'bibr' or (metacheck_llm == 'ollama' and not (has_gpu | bool)))
+             and (metacheck_bibr_remote | bool) and metacheck_bibr_url_value | length > 0 }}
+        metacheck_shared_llm_url: "{{ metacheck_bibr_url_value | regex_replace(':[0-9]+$', '') }}:11435"
+
+    - name: Check that the bibr workspace shares its model
+      ansible.builtin.uri:
+        url: "{{ metacheck_shared_llm_url }}/v1/models"
+        headers:
+          Authorization: "Bearer {{ metacheck_bibr_key_value }}"
+        timeout: 15
+      register: shared_llm_probe
+      failed_when: false
+      no_log: true
+      when: metacheck_shared_llm | bool
+
+    - name: Note which model the power check uses
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('The power check uses the model of the bibr workspace at ' ~ metacheck_shared_llm_url ~
+              (' (it answers).' if (shared_llm_probe.status | default(0)) == 200
+               else ' but it does not answer yet (HTTP ' ~ (shared_llm_probe.status | default('none')) ~ '): run the bibr playbook with bibr_share_llm = true.'))
+             if metacheck_shared_llm | bool else
+             ('No model: ' ~ ('metacheck_llm is none' if metacheck_llm == 'none' else 'no GPU and no bibr workspace on the private network') ~
+              '. The LLM power check in the app can still use a cloud provider.') }}
+      when: not (metacheck_local_llm | bool)
+
+    # For model files, and for the web interface's job folders (uploads of up
+    # to 500 MB, unpacked to up to 1000 MB).
+    - name: Find a large disk for model files and jobs
+      ansible.builtin.include_tasks: tasks/large_disk.yml
+
+    # Anonymous use counts of the app and the web interface (metacheck's
+    # METACHECK_USAGE_DIR), on the storage volume when there is one, so they
+    # outlive the workspace.
+    - name: Choose the folder for use counts
+      ansible.builtin.set_fact:
+        metacheck_usage_dir: "{{ (large_disk ~ '/metacheck-usage') if large_disk is match('/data/') else '/var/lib/metacheck-usage' }}"
+
+    - name: Install Ollama and pull the model
+      ansible.builtin.include_tasks: tasks/ollama.yml
+      vars:
+        ollama_model: "{{ metacheck_llm_model }}"
+        ollama_context_length: "{{ metacheck_ollama_context }}"
+      when: metacheck_local_llm | bool
+
+    # ------------------------------------------------------------------
+    # R, Quarto, Shiny Server, metacheck and the paper report app
+    # ------------------------------------------------------------------
+    - name: Install packages R needs to build metacheck
       ansible.builtin.apt:
         name:
-          - ca-certificates
-          - curl
-          - gnupg
-          - git
-          - jq
-          - openssl
-          - apt-transport-https
-          - software-properties-common
           - gdebi-core
           - python3-dbus
           - python3-gi
           - python3-apt
           - make
         state: present
-        update_cache: true
-
-    # ------------------------------------------------------------------
-    # Docker + NVIDIA container toolkit (for bibr's Compose stack)
-    # ------------------------------------------------------------------
-    - name: Create apt keyrings directory
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
-
-    - name: Add Docker apt key
-      ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /etc/apt/keyrings/docker.asc
-        mode: "0644"
-
-    - name: Add Docker apt repository
-      ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable"
-        filename: docker
-        state: present
-
-    - name: Add NVIDIA container toolkit apt key
-      ansible.builtin.shell: curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /etc/apt/keyrings/nvidia-container-toolkit.gpg
-      args:
-        creates: /etc/apt/keyrings/nvidia-container-toolkit.gpg
-
-    - name: Add NVIDIA container toolkit apt repository
-      ansible.builtin.shell: >
-        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list
-        | sed 's#deb https://#deb [signed-by=/etc/apt/keyrings/nvidia-container-toolkit.gpg] https://#g'
-        > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-      args:
-        creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-    - name: Install Docker and the NVIDIA container toolkit
-      ansible.builtin.apt:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-          - nvidia-container-toolkit
-        state: present
-        update_cache: true
-      register: docker_pkgs
-
-    - name: Register the NVIDIA runtime with Docker
-      ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
-      args:
-        creates: /etc/docker/daemon.json
-      register: nvidia_runtime
-
-    - name: Find a large disk for Docker's images
-      ansible.builtin.shell: |
-        set -e
-        if [ "{{ metacheck_docker_root }}" != "auto" ]; then
-          echo "{{ metacheck_docker_root }}"; exit 0
-        fi
-        # First mounted SRC storage volume under /data (persistent across restarts).
-        vol=$(findmnt -rn -o TARGET | grep '^/data/' | head -1 || true)
-        if [ -n "$vol" ]; then echo "$vol/metacheck-docker"; exit 0; fi
-        # Ephemeral scratch disk (images are rebuilt after a reboot).
-        if findmnt -rn /mnt/scratch >/dev/null; then echo "/mnt/scratch/metacheck-docker"; exit 0; fi
-        echo "/var/lib/docker"
-      register: docker_root_probe
-      changed_when: false
-
-    - name: Set Docker data directory
-      ansible.builtin.set_fact:
-        docker_data_root: "{{ docker_root_probe.stdout | trim }}"
-
-    - name: Check free space where Docker will build (needs about 90 GB)
-      ansible.builtin.shell: df -BG --output=avail "$(dirname {{ docker_data_root }})" | tail -1 | tr -dc '0-9'
-      register: docker_root_free
-      changed_when: false
-      failed_when: (docker_root_free.stdout | int) < 90
-
-    - name: Show Docker data directory
-      ansible.builtin.debug:
-        msg: "Docker images go to {{ docker_data_root }} ({{ docker_root_free.stdout }} GB free)"
-
-    - name: Point Docker at that directory
-      ansible.builtin.shell: |
-        set -e
-        tmp=$(mktemp)
-        # Docker 29 keeps images in the containerd store under /var/lib/containerd,
-        # which ignores data-root; the classic store keeps everything under data-root.
-        jq --arg root "{{ docker_data_root }}" '. + {"data-root": $root, "features": {"containerd-snapshotter": false}}' /etc/docker/daemon.json > "$tmp"
-        if ! cmp -s "$tmp" /etc/docker/daemon.json; then mv "$tmp" /etc/docker/daemon.json; echo changed; else rm -f "$tmp"; fi
-      register: daemon_json
-      changed_when: "'changed' in daemon_json.stdout"
-
-    - name: Create Docker's systemd drop-in directory
-      ansible.builtin.file:
-        path: /etc/systemd/system/docker.service.d
-        state: directory
-        mode: "0755"
-
-    - name: Make Docker wait for that disk at boot
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/docker.service.d/metacheck-data-root.conf
-        mode: "0644"
-        content: |
-          [Unit]
-          RequiresMountsFor={{ docker_data_root }}
-      register: docker_dropin
-      when: docker_data_root != '/var/lib/docker'
-
-    - name: Enable and restart Docker
-      ansible.builtin.systemd:
-        name: docker
-        enabled: true
-        state: "{{ 'restarted' if (docker_pkgs.changed or nvidia_runtime.changed or daemon_json.changed or docker_dropin.changed) else 'started' }}"
-        daemon_reload: true
-
-    # ------------------------------------------------------------------
-    # Ollama (local language model on the GPU)
-    # ------------------------------------------------------------------
-    - name: Install Ollama
-      ansible.builtin.shell: curl -fsSL https://ollama.com/install.sh | sh
-      args:
-        creates: /usr/local/bin/ollama
-      register: ollama_install
-      when: metacheck_llm_provider == 'ollama'
-
-    - name: Create the Ollama model directory on the large disk
-      ansible.builtin.file:
-        path: "{{ docker_data_root | dirname }}/metacheck-ollama"
-        state: directory
-        owner: ollama
-        group: ollama
-        mode: "0755"
-      when: metacheck_llm_provider == 'ollama'
-
-    - name: Create the Ollama systemd drop-in directory
-      ansible.builtin.file:
-        path: /etc/systemd/system/ollama.service.d
-        state: directory
-        mode: "0755"
-      when: metacheck_llm_provider == 'ollama'
-
-    - name: Configure Ollama (reachable from containers, model kept loaded, models on the large disk)
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/ollama.service.d/metacheck.conf
-        mode: "0644"
-        content: |
-          [Unit]
-          RequiresMountsFor={{ docker_data_root | dirname }}/metacheck-ollama
-          [Service]
-          # Listen on all interfaces so the bibr container can reach it through
-          # host.docker.internal; the SRC firewall keeps port 11434 closed outside.
-          Environment=OLLAMA_HOST=0.0.0.0:11434
-          Environment=OLLAMA_MODELS={{ docker_data_root | dirname }}/metacheck-ollama
-          Environment=OLLAMA_KEEP_ALIVE=-1
-          Environment=OLLAMA_MAX_LOADED_MODELS=1
-      register: ollama_conf
-      when: metacheck_llm_provider == 'ollama'
-
-    - name: Enable and restart Ollama
-      ansible.builtin.systemd:
-        name: ollama
-        enabled: true
-        state: "{{ 'restarted' if (ollama_install.changed or ollama_conf.changed) else 'started' }}"
-        daemon_reload: true
-      when: metacheck_llm_provider == 'ollama'
-
-    # ------------------------------------------------------------------
-    # bibr Compose stack (built and started in the background)
-    # ------------------------------------------------------------------
-    - name: Clone bibr at the pinned release
-      ansible.builtin.git:
-        repo: https://github.com/scienceverse/bibr.git
-        dest: "{{ metacheck_bibr_dir }}"
-        version: "{{ metacheck_bibr_ref }}"
-        depth: 1
-        force: true
-      register: bibr_git
-
-    - name: Flag a rebuild of the bibr images when the bibr source changed
-      ansible.builtin.file:
-        path: "{{ metacheck_bibr_dir }}/.rebuild"
-        state: touch
-        mode: "0644"
-      when: bibr_git.changed
-
-    - name: Write bibr environment file
-      ansible.builtin.template:
-        src: templates/bibr.env.j2
-        dest: "{{ metacheck_bibr_dir }}/.env"
-        owner: root
-        group: root
-        mode: "0600"
-      no_log: true
-      register: bibr_env
-
-    - name: Let the bibr container reach services on the workspace (Ollama)
-      ansible.builtin.copy:
-        src: files/docker-compose.override.yml
-        dest: "{{ metacheck_bibr_dir }}/docker-compose.override.yml"
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Install bibr stack start script
-      ansible.builtin.copy:
-        src: files/bibr-stack-up.sh
-        dest: "{{ metacheck_root }}/bin/bibr-stack-up.sh"
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Install bibr stack systemd service
-      ansible.builtin.template:
-        src: templates/bibr-stack.service.j2
-        dest: /etc/systemd/system/bibr-stack.service
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Start the bibr stack build in the background
-      ansible.builtin.systemd:
-        name: bibr-stack
-        enabled: true
-        # A changed .env must reach the running containers: restart re-runs the
-        # script, which only rebuilds what changed and recreates the containers.
-        state: "{{ 'restarted' if bibr_env.changed else 'started' }}"
-        daemon_reload: true
-        no_block: true
-      when: metacheck_start_bibr | bool
-
-    # ------------------------------------------------------------------
-    # R (CRAN apt repository + r2u binary packages)
-    # ------------------------------------------------------------------
-    - name: Update status file
-      ansible.builtin.lineinfile:
-        path: /var/log/metacheck/status.txt
-        line: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  component: bibr build started in background; installing R"
 
     - name: Add r2u apt key
       ansible.builtin.get_url:
@@ -519,19 +348,14 @@
     # ------------------------------------------------------------------
       register: shiny_pkg
 
-    - name: Update status file
-      ansible.builtin.lineinfile:
-        path: /var/log/metacheck/status.txt
-        line: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  component: installing metacheck"
-
     - name: Copy metacheck install script
       ansible.builtin.copy:
-        src: files/install-metacheck.R
-        dest: "{{ metacheck_root }}/bin/install-metacheck.R"
+        src: files/metacheck/install-metacheck.R
+        dest: "{{ metacheck_component_dir }}/bin/install-metacheck.R"
         mode: "0644"
 
     - name: Install metacheck from GitHub
-      ansible.builtin.command: Rscript {{ metacheck_root }}/bin/install-metacheck.R {{ metacheck_metacheck_repo }} {{ metacheck_metacheck_ref }}
+      ansible.builtin.command: Rscript {{ metacheck_component_dir }}/bin/install-metacheck.R {{ metacheck_repo }} {{ metacheck_ref }}
       register: metacheck_install
       # remotes skips the install when the GitHub commit is already installed
       changed_when: "'Skipping install' not in (metacheck_install.stdout + metacheck_install.stderr)"
@@ -539,6 +363,36 @@
     - name: Show the installed metacheck
       ansible.builtin.debug:
         msg: "{{ metacheck_install.stdout_lines | last }}"
+
+    - name: Create the folder for installed metacheck modules
+      ansible.builtin.file:
+        path: "{{ metacheck_modules_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy the module install script
+      ansible.builtin.copy:
+        src: files/metacheck/install-modules.R
+        dest: "{{ metacheck_component_dir }}/bin/install-modules.R"
+        mode: "0644"
+
+    - name: Install metacheck modules from GitHub (metacheck_modules)
+      ansible.builtin.command:
+        argv: "{{ ['Rscript', metacheck_component_dir ~ '/bin/install-modules.R'] + (metacheck_modules | regex_replace(',', ' ')).split() }}"
+      environment:
+        METACHECK_MODULES_DIR: "{{ metacheck_modules_dir }}"
+      register: metacheck_modules_install
+      # module_install() and module_update() say "Installed ..." when they
+      # downloaded a commit, "... is already up to date" otherwise
+      changed_when: "'Installed ' in metacheck_modules_install.stderr"
+      when: metacheck_modules not in ['', 'none']
+
+    - name: Show the installed modules
+      ansible.builtin.debug:
+        msg: "{{ (metacheck_modules_install.stderr_lines | select('match', '^NOT INSTALLED') | list) + [metacheck_modules_install.stdout_lines | last] }}"
+      when: metacheck_modules not in ['', 'none']
 
     - name: Create the app directory
       ansible.builtin.file:
@@ -569,16 +423,34 @@
 
     - name: Write Shiny Server configuration
       ansible.builtin.copy:
-        src: files/shiny-server.conf
+        src: files/metacheck/shiny-server.conf
         dest: /etc/shiny-server/shiny-server.conf
         owner: root
         group: root
         mode: "0644"
       register: shiny_conf
 
+    - name: Create the folder for use counts
+      ansible.builtin.file:
+        path: "{{ metacheck_usage_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
+
+    # A reused volume may hold the counts of an earlier workspace, whose shiny
+    # user had another number.
+    - name: Give the shiny user the counts already in that folder
+      ansible.builtin.file:
+        path: "{{ metacheck_usage_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        recurse: true
+
     - name: Write environment for the shiny user (bibr token, LLM keys)
       ansible.builtin.template:
-        src: templates/Renviron.j2
+        src: templates/metacheck/Renviron.j2
         dest: /home/shiny/.Renviron
         owner: shiny
         group: shiny
@@ -593,6 +465,137 @@
         state: "{{ 'restarted' if (shiny_pkg.changed or metacheck_install.changed or shiny_app_copy.changed or shiny_conf.changed or shiny_env.changed) else 'started' }}"
 
     # ------------------------------------------------------------------
+    # Sandbox for running the code of uploaded repositories
+    # ------------------------------------------------------------------
+    - name: Check whether bibr runs on this workspace
+      ansible.builtin.stat:
+        path: /opt/bibr
+      register: sandbox_bibr_here
+
+    - name: Note that code will not be run
+      ansible.builtin.debug:
+        msg: "Code of uploaded repositories will not be run: {{ 'metacheck_run_code is false' if not (metacheck_run_code | bool) else 'bibr uses Docker on this workspace with other settings' }}."
+      when: not (metacheck_run_code | bool) or sandbox_bibr_here.stat.exists
+
+    - name: Set up the sandbox
+      ansible.builtin.include_tasks: tasks/sandbox.yml
+      when: metacheck_run_code | bool and not sandbox_bibr_here.stat.exists
+
+    - name: Remember whether code can be run
+      ansible.builtin.set_fact:
+        metacheck_sandbox_on: "{{ (metacheck_run_code | bool) and not sandbox_bibr_here.stat.exists and (metacheck_sandbox_ready | default(false) | bool) }}"
+
+    # ------------------------------------------------------------------
+    # Web interface (api/): PDF or bibr JSON in, report out
+    # ------------------------------------------------------------------
+    - name: Create the web interface folder
+      ansible.builtin.file:
+        path: "{{ metacheck_component_dir }}/api/metacheck-plumber"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # metacheck's API helper code (inst/plumber/utils) and its repository
+    # check app (inst/app/shiny_app_repocheck, for folder checks) are not part
+    # of the installed package (.Rbuildignore), so they are taken from the
+    # same repository and branch metacheck was installed from.
+    - name: Fetch metacheck's API helper code and repository check app
+      ansible.builtin.shell: |
+        set -e
+        tmp=$(mktemp -d)
+        git clone -q --depth 1 --filter=blob:none --sparse -b {{ metacheck_ref }} https://github.com/{{ metacheck_repo }}.git "$tmp/mc"
+        git -C "$tmp/mc" sparse-checkout set inst/plumber/utils inst/app/shiny_app_repocheck
+        api={{ metacheck_component_dir }}/api
+        for pair in "inst/plumber/utils:metacheck-plumber/utils" "inst/app/shiny_app_repocheck:metacheck-repocheck"; do
+          src="$tmp/mc/${pair%%:*}"; dest="$api/${pair#*:}"
+          if ! diff -rq "$src" "$dest" >/dev/null 2>&1; then
+            rm -rf "$dest"; cp -r "$src" "$dest"; chmod -R a+rX "$dest"; echo "changed $dest"
+          fi
+        done
+        rm -rf "$tmp"
+      register: api_helpers
+      changed_when: "'changed' in api_helpers.stdout"
+
+    - name: Install the command that summarises the use counts
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-usage
+        dest: /usr/local/sbin/metacheck-usage
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the web interface
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ metacheck_component_dir }}/api/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { src: api/api.R, dest: api.R }
+        - { src: api/worker.R, dest: worker.R }
+        - { src: app/bibr_client.R, dest: bibr_client.R }
+      register: api_files
+
+    # The website: static files, served by nginx (location /site/).
+    - name: Install the website
+      ansible.builtin.copy:
+        src: site/
+        dest: "{{ metacheck_component_dir }}/site/"
+        owner: root
+        group: root
+        mode: u=rwX,go=rX
+        directory_mode: "0755"
+
+    # Job folders (uploads while queued, results for one hour), shiny only;
+    # on the storage volume when there is one. Recursive, because a reused
+    # volume may hold folders of an earlier workspace's shiny user.
+    - name: Choose the web interface's job folder
+      ansible.builtin.set_fact:
+        metacheck_api_jobs_dir: "{{ (large_disk ~ '/metacheck-api-jobs') if large_disk is match('/data/') else '/var/lib/metacheck-api/jobs' }}"
+
+    - name: Create the web interface's job folder
+      ansible.builtin.file:
+        path: "{{ metacheck_api_jobs_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
+
+    - name: Give the shiny user what is already in the job folder
+      ansible.builtin.file:
+        path: "{{ metacheck_api_jobs_dir }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        recurse: true
+
+    - name: Install the web interface service
+      ansible.builtin.template:
+        src: templates/metacheck/metacheck-api.service.j2
+        dest: /etc/systemd/system/metacheck-api.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: api_service
+
+    - name: Enable and (re)start the web interface
+      ansible.builtin.systemd:
+        name: metacheck-api
+        enabled: true
+        daemon_reload: true
+        state: "{{ 'restarted' if (api_helpers.changed or api_files.changed or api_service.changed or metacheck_install.changed or shiny_env.changed) else 'started' }}"
+
+    - name: Wait for the web interface to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ metacheck_api_port }}/health"
+      register: api_up
+      until: api_up.status == 200
+      retries: 30
+      delay: 2
+
+    # ------------------------------------------------------------------
     # nginx (only when the SRC-Nginx component configured the workspace)
     # ------------------------------------------------------------------
     - name: Check for the SRC-Nginx location directory
@@ -600,37 +603,101 @@
         path: /etc/nginx/app-location-conf.d
       register: nginx_locations
 
-    - name: Install nginx locations for metacheck and bibr
+    # Two variants of the app's nginx file (SRAM login / open to anyone);
+    # the switch `metacheck-public on|off` puts one of them in place.
+    - name: Create the folder for the nginx variants
+      ansible.builtin.file:
+        path: "{{ metacheck_component_dir }}/nginx"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_locations.stat.exists
+
+    - name: Prepare the nginx variants of the app (login and public)
       ansible.builtin.template:
-        src: templates/metacheck-nginx.conf.j2
-        dest: /etc/nginx/app-location-conf.d/metacheck.conf
+        src: templates/metacheck/metacheck-nginx.conf.j2
+        dest: "{{ metacheck_component_dir }}/nginx/metacheck-{{ item.name }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        metacheck_nginx_public: "{{ item.public }}"
+      loop:
+        - { name: login, public: false }
+        - { name: public, public: true }
+      when: nginx_locations.stat.exists
+      register: metacheck_variants
+
+    - name: Install the per-visitor limit for the public app
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-public-limit.conf
+        dest: /etc/nginx/conf.d/metacheck-public-limit.conf
         owner: root
         group: root
         mode: "0644"
       when: nginx_locations.stat.exists
+      register: metacheck_limit
 
-    - name: Reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded
+    - name: Install the switch `metacheck-public on|off|status`
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-public
+        dest: /usr/local/sbin/metacheck-public
+        owner: root
+        group: root
+        mode: "0755"
       when: nginx_locations.stat.exists
+
+    - name: Read whether the app is public now
+      ansible.builtin.command: /usr/local/sbin/metacheck-public status
+      register: metacheck_public_state
+      changed_when: false
+      when: nginx_locations.stat.exists
+
+    # Puts the chosen variant in place (and reloads nginx) when the state
+    # differs, when no variant is in place yet, or when the variants changed.
+    - name: Open or close the app (metacheck_public = {{ metacheck_public }})
+      ansible.builtin.command: /usr/local/sbin/metacheck-public {{ 'on' if metacheck_public | bool else 'off' }}
+      when: >-
+        nginx_locations.stat.exists and (
+          (metacheck_public | bool) != ('open' in metacheck_public_state.stdout)
+          or metacheck_variants.changed or metacheck_limit.changed)
+      register: metacheck_nginx
+
+    - name: Show the website at the workspace root
+      ansible.builtin.copy:
+        dest: /etc/nginx/app-location-conf.d/00-root.conf
+        mode: "0644"
+        content: |
+          # Managed by the scienceverse/surf-research-cloud components.
+          # The root shows the metacheck website (location /site/, which also
+          # decides whether a login is needed).
+          location = / {
+              rewrite ^ /site/ last;
+          }
+      when: nginx_locations.stat.exists
+      register: root_nginx
+
+    - name: Check and reload nginx
+      ansible.builtin.shell: nginx -t && systemctl reload nginx
+      when: nginx_locations.stat.exists and (metacheck_nginx.changed or root_nginx.changed)
 
     - name: Note the absence of SRC-Nginx
       ansible.builtin.debug:
         msg: "SRC-Nginx is not installed: the app is only reachable on the workspace itself (http://127.0.0.1:{{ metacheck_shiny_port }}/metacheck/)."
       when: not nginx_locations.stat.exists
 
-    # ------------------------------------------------------------------
-    # Done
-    # ------------------------------------------------------------------
+    - name: Free disk space
+      ansible.builtin.include_tasks: tasks/cleanup.yml
+
     - name: Update status file
       ansible.builtin.lineinfile:
-        path: /var/log/metacheck/status.txt
-        line: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  component: metacheck app installed; waiting for the bibr stack (see lines below)"
+        path: "{{ status_file }}"
+        line: "{{ lookup('pipe', 'date \"+%Y-%m-%d %H:%M:%S\"') }}  metacheck component: installed"
 
     - name: Summary
       ansible.builtin.debug:
         msg:
-          - "metacheck report app: /metacheck/ on the workspace URL (Shiny Server on 127.0.0.1:{{ metacheck_shiny_port }})"
-          - "bibr API: /bibr/ on the workspace URL; bearer token in {{ metacheck_secrets_dir }}/bibr_api_key (root only)"
-          - "bibr stack build progress: /metacheck-status on the workspace URL, or /var/log/metacheck/status.txt"
+          - "metacheck paper report app: /metacheck/ on the workspace URL (Shiny Server on 127.0.0.1:{{ metacheck_shiny_port }})"
+          - "{{ ('PDF conversion: bibr at ' ~ metacheck_bibr_url_value) if metacheck_bibr_url_value | length > 0 else 'PDF conversion: GROBID servers (no bibr configured)' }}"
+          - "{{ ('Local model for the power check: ' ~ metacheck_llm_model ~ ' at ' ~ ollama_url) if metacheck_local_llm | bool else (('Model for the power check: ' ~ metacheck_llm_model ~ ' on the bibr workspace, ' ~ metacheck_shared_llm_url) if metacheck_shared_llm | bool else 'No model for the power check') }}"

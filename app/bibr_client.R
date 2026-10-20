@@ -16,14 +16,24 @@
 #' @param api_url bibr server address (BIBR_API_URL).
 #' @param api_key bearer token (BIBR_API_KEY); none is sent when empty.
 #' @param timeout seconds to wait for the extraction.
+#' @param crossref TRUE or FALSE: whether bibr completes the references
+#'   through Crossref (which sends the reference list to Crossref); NULL
+#'   leaves it to the bibr server's own setting (CROSSREF_ENRICH).
+#' @param file_name the PDF's own name, written into the JSON
+#'   (source.file_name). bibr writes the name of the file it was sent, and
+#'   uploads are saved under another name (input.pdf by the API, a temporary
+#'   name such as 0.pdf by Shiny).
 #' @return path to the JSON file, readable with metacheck::read().
 bibr_convert <- function(pdf_path, save_dir,
                          api_url = Sys.getenv("BIBR_API_URL"),
                          api_key = Sys.getenv("BIBR_API_KEY"),
-                         timeout = 900) {
+                         timeout = 900, crossref = NULL,
+                         file_name = basename(pdf_path)) {
+  fields <- list(file = curl::form_file(pdf_path))
+  if (!is.null(crossref)) fields$crossref <- if (isTRUE(crossref)) "true" else "false"
   req <- httr2::request(api_url) |>
     httr2::req_url_path_append("papers", "extract") |>
-    httr2::req_body_multipart(file = curl::form_file(pdf_path)) |>
+    httr2::req_body_multipart(!!!fields) |>
     httr2::req_timeout(timeout) |>
     httr2::req_error(is_error = function(resp) FALSE)
   if (nzchar(api_key)) req <- httr2::req_auth_bearer_token(req, api_key)
@@ -41,12 +51,32 @@ bibr_convert <- function(pdf_path, save_dir,
          httr2::resp_status(resp), "). ", detail, call. = FALSE)
   }
 
-  # Saved exactly as bibr sent it.
+  # Saved as bibr sent it, with the PDF's own name in place of the name of
+  # the file bibr was sent.
   dir.create(save_dir, showWarnings = FALSE, recursive = TRUE)
   json_path <- file.path(save_dir,
                          sub("\\.[^.]*$", ".json", basename(pdf_path)))
-  writeBin(httr2::resp_body_raw(resp), json_path)
+  writeBin(bibr_set_file_name(httr2::resp_body_raw(resp), basename(pdf_path), file_name),
+           json_path)
   json_path
+}
+
+#' Put a file's own name into bibr's JSON
+#'
+#' bibr writes the name of the file it converted as "file_name" (in "source"),
+#' once. The text is changed in place, not read and written again, so the rest
+#' of the JSON stays exactly as bibr sent it.
+#'
+#' @param raw the JSON as bytes.
+#' @param sent the name of the file bibr was sent.
+#' @param name the file's own name.
+#' @return the JSON as bytes.
+bibr_set_file_name <- function(raw, sent, name) {
+  if (is.null(name) || is.na(name) || !nzchar(name) || identical(name, sent)) return(raw)
+  json <- rawToChar(raw)
+  from <- paste0("\"file_name\":", jsonlite::toJSON(sent, auto_unbox = TRUE))
+  to <- paste0("\"file_name\":", jsonlite::toJSON(enc2utf8(name), auto_unbox = TRUE))
+  charToRaw(sub(from, to, json, fixed = TRUE, useBytes = TRUE))
 }
 
 #' Read a bibr JSON file into a metacheck paper
