@@ -149,6 +149,16 @@ same time, a chosen .zip, a wrong file, the list of checks, and the layout at 37
 500 and 1400 pixels wide. Not tested: dropping a folder onto the page (the
 browser's drag and drop cannot be scripted with real folders).
 
+Before packing a folder, the page tries every file, because the browser lists some
+files it cannot read: on Windows, files whose full path is longer than 260
+characters (the browser lists them as empty, or leaves them out without a word),
+files OneDrive keeps online only, and files opened or moved since. Packing used to
+stop on the first one with the browser's message "A requested file or directory
+could not be found at the time an operation was processed."; the page now names the
+files and says what to do (move the folder to a short path, keep it on the device,
+or pack it with 7-Zip). Tested in Edge on cached repositories with long paths
+(20 October 2026).
+
 ## Running a repository's code
 
 The repository check (`/api/repocheck`, column 2 of the website) also runs the
@@ -314,7 +324,14 @@ A folder check (`repocheck`) is the check of metacheck's repository check app
 metacheck branch, and the interface uses its .zip checks, its three modules and its
 short report with a folded file list, so both give the same report. The report names
 the folder after the .zip (or after the one folder the .zip contains), not after its
-place on the server (metacheck issue #500). A small folder takes about 10 s.
+place on the server (metacheck issue #500), and never `modules`: metacheck looks
+for a module in `./modules/` before the installed ones, and the check runs from
+the unpacking folder, so an upload named `modules.zip` could otherwise replace an
+installed module with its own code. A small folder takes about 10 s.
+
+When the R process that runs a job ends without saying why (a crash in compiled
+code, or no memory left), the job's `error` says so, with its last step, instead of
+"The job stopped unexpectedly."
 
 Instead of a .zip, a folder check can get a link to an online repository (form
 field `url`, without a file). The server then fetches the public files itself, as the

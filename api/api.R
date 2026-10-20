@@ -183,6 +183,30 @@ running <- new.env()          # job id -> callr process
   }
 }
 
+# The error for a worker that ended without writing done or failed: the R
+# process itself stopped (a crash inside a package's compiled code, or the
+# server ran out of memory), so worker.R could not say why. Says what the job
+# was doing (its step, or metacheck's last progress message) and whether R
+# crashed (worker.log has R's "caught segfault").
+.stopped_message <- function(id, st) {
+  dir <- .job_dir(id)
+  read1 <- function(f) {
+    p <- file.path(dir, f)
+    if (!file.exists(p)) return(character(0))
+    tryCatch(readLines(p, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+  }
+  progress <- read1("progress.txt")
+  doing <- if (length(progress) && grepl("\t", progress[[1]])) sub("^[^\t]*\t", "", progress[[1]]) else ""
+  if (!nzchar(doing)) doing <- st$step %||% ""
+  crashed <- any(grepl("caught segfault|caught illegal operation|caught bus error", read1("worker.log")))
+  paste0(
+    "The check stopped unexpectedly",
+    if (crashed) ": the R process that runs it crashed. This is a fault in metacheck or a package it uses, not in your files."
+    else ": the process that runs it ended (perhaps the server ran out of memory).",
+    if (nzchar(doing) && doing != "starting") paste0(" Its last step was: ", doing, ".") else "",
+    " Please report it at https://github.com/scienceverse/metacheck/issues, with the files if you can share them.")
+}
+
 .job_timeout <- function(id) {
   if (isTRUE(.read_job(id)$run_code)) SANDBOX_TIMEOUT_MINUTES else JOB_TIMEOUT_MINUTES
 }
@@ -200,8 +224,8 @@ running <- new.env()          # job id -> callr process
         rm(list = id, envir = running)
         st <- .read_status(id)
         if (!(st$status %in% c("done", "failed"))) {
+          st$error <- .stopped_message(id, st)
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
-          st$error <- "The job stopped unexpectedly."
           .write_status(id, st)
         }
         .usage_record(id, st$status)
@@ -428,11 +452,14 @@ later::later(.scheduler, 1)
                             crossref = .parse_flag(up$fields$crossref),
                             # run the code in the sandbox: for a repository check by
                             # default, for a paper (its repository, through the links in
-                            # the paper) only when asked; only where the sandbox is on
-                            # an installed module runs no code in the sandbox
-                            run_code = SANDBOX_ON && kind != "convert" && !length(modules) &&
-                              (if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
-                               else .parse_flag(up$fields$run_code)),
+                            # the paper) only when asked; only where the sandbox is on.
+                            # An installed module (such as tue_datamanager_check) runs
+                            # the code only when asked, and runs reproducibility_check itself
+                            run_code = SANDBOX_ON && kind != "convert" &&
+                              (if (kind == "repocheck" && length(modules)) .parse_flag(up$fields$run_code)
+                               else !length(modules) &&
+                                 (if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
+                                  else .parse_flag(up$fields$run_code))),
                             # for an installed module: whether people took part, if
                             # the sender knows (true/false); null lets it decide
                             human_participants = .parse_answer(up$fields$human_participants),
@@ -598,7 +625,7 @@ function() {
 #* @param human_participants repocheck with an installed module: "true" or "false" when you know whether people took part or personal data was used (optional)
 #* @param report "true" to include the HTML report in a check result (optional)
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
-#* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
+#* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @serializer unboxedJSON
 function(req, res) {
   id <- tryCatch(.submit(req), error = function(e) e)
@@ -662,7 +689,7 @@ function(req, res) .one_call(req, res, "convert")
 #* @parser octet
 #* @param file:file The .zip of the folder (or, instead, `url`)
 #* @param url A link to an online repository (GitHub, OSF, Zenodo, Dataverse, ...), instead of a .zip; the server fetches its public files
-#* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health)
+#* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health). With an installed module: "true" to have it run the code in the sandbox (default false)
 #* @param modules An installed module to run on the .zip or link instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
 #* @param human_participants For an installed module: "true" or "false" when you know whether people took part or personal data was used (optional; the module decides otherwise)
 function(req, res) .one_call(req, res, "repocheck")

@@ -222,6 +222,10 @@ a.result-button.secondary:hover { background: var(--green-tint); color: var(--gr
   color: var(--error);
   font-size: 0.92rem;
 }
+/* an error with an explanation: paragraphs and lists (files the browser cannot read) */
+.error p { margin: 0 0 6px; }
+.error ul { margin: 0 0 8px; padding-left: 20px; }
+.error li { overflow-wrap: anywhere; margin-bottom: 2px; }
 
 /* ---- about and footer ---- */
 .about { max-width: 820px; margin: 48px auto 0; }

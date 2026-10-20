@@ -40,8 +40,73 @@ async function errorText(response) {
     const j = await response.json();
     if (j && j.error) return j.error;
   } catch (e) { /* not JSON */ }
+  if ([502, 503, 504].includes(response.status)) {
+    return "The server is not answering at the moment (HTTP " + response.status + "). Try again in a few minutes.";
+  }
   return "The server answered with an error (HTTP " + response.status + ").";
 }
+
+// ---- files the browser cannot read ------------------------------------------
+
+// The browser lists a folder's files when it is chosen, but some of them it
+// cannot read: on Windows, a file whose full path is longer than 260
+// characters (the browser lists it as empty, or leaves it out without a
+// word), a file OneDrive keeps online only, or a file opened, moved or
+// deleted since. JSZip would stop on the first one with the browser's own
+// message ("A requested file or directory could not be found at the time an
+// operation was processed."), so every file is tried first: its first byte,
+// or all of an empty file. Returns the paths that could not be read.
+async function unreadableFiles(files, onProgress) {
+  const bad = [];
+  let next = 0, done = 0;
+  async function worker() {
+    while (next < files.length) {
+      const f = files[next++];
+      if (f.error) {
+        bad.push(f.path);
+      } else {
+        try { await (f.file.size === 0 ? f.file : f.file.slice(0, 1)).arrayBuffer(); }
+        catch (e) { bad.push(f.path); }
+      }
+      if (++done % 100 === 0) onProgress(done / files.length);
+    }
+  }
+  await Promise.all(Array.from({ length: 8 }, worker));
+  return bad.sort();
+}
+
+// What to do when files cannot be read (the reasons above), as the error box shows it.
+function unreadableMessage(bad, total) {
+  // the file's name and the end of its folder; the whole path on hover
+  const short = p => {
+    const name = p.replace(/\/$/, "").replace(/^.*\//, "");
+    const dir = p.slice(0, p.length - name.length).replace(/\/+$/, "");
+    const tail = dir.length > 40 ? "…" + dir.slice(-40) : dir;
+    return el("li", { title: p }, name + (tail ? " (in " + tail + "/)" : ""));
+  };
+  const shown = bad.slice(0, 5).map(short);
+  if (bad.length > 5) shown.push(el("li", {}, "and " + (bad.length - 5) + " more"));
+  return [
+    el("p", {}, "The browser could not read " + bad.length + " of the " + total +
+       " files it found in the folder, so the folder cannot be checked as it is:"),
+    el("ul", {}, ...shown),
+    el("p", {}, "This usually has one of these causes:"),
+    el("ul", {},
+       el("li", {}, "The file's full path on this computer is longer than Windows allows (260 characters). Move the folder closer to the top of the drive, for example to C:\\check\\, and choose it again. Windows can also leave such files out without saying so: if the folder holds more than " + total + " files, that has happened too."),
+       el("li", {}, "The file is in OneDrive but kept online only. Right-click the folder, choose \"Always keep on this device\", wait until it has downloaded, and choose it again."),
+       el("li", {}, "The file is open in another program, or was moved or deleted after the folder was chosen.")),
+    el("p", {}, "Or pack the folder into a .zip yourself, with 7-Zip (which handles long paths), and choose the .zip.")
+  ];
+}
+
+// An error whose message is a list of elements (unreadableMessage()), for start().
+function richError(nodes) {
+  const e = new Error(nodes.map(n => n.textContent).join(" "));
+  e.nodes = nodes;
+  return e;
+}
+
+const TOO_LARGE_ADVICE = " Leave out large files that do not need checking (such as recordings, images or videos), or paste the link to the online repository instead.";
 
 // ---- the status area of one tool -------------------------------------------
 
@@ -62,8 +127,9 @@ function statusArea(section) {
       }
       if (text !== undefined) step.textContent = text;
     },
+    // a text, or a list of elements (paragraphs and lists)
     error(message) {
-      box.replaceChildren(el("div", { class: "error", role: "alert" }, message));
+      box.replaceChildren(el("div", { class: "error", role: "alert" }, ...[].concat(message)));
     },
     result(children) {
       box.replaceChildren(el("div", { class: "results" }, ...children));
@@ -159,7 +225,7 @@ async function start(section, getUpload, kind, fields) {
     const blob = await runJob(section, file, filename, kind, fields, ui);
     offerResult(ui, blob, kind, name);
   } catch (e) {
-    ui.error(e.message || String(e));
+    ui.error(e.nodes || e.message || String(e));
   } finally {
     busyJobs--;
     button.disabled = false;
@@ -268,14 +334,26 @@ async function loadModules(section) {
 
 // Every file under a dropped folder (DataTransfer entries; readEntries
 // returns at most about 100 entries per call, so it is called until empty).
+// A file or folder the browser cannot open is kept with its error, for
+// unreadableFiles().
 async function filesFromEntry(entry, out) {
+  const path = entry.fullPath.replace(/^\/+/, "");
   if (entry.isFile) {
-    const file = await new Promise((res, rej) => entry.file(res, rej));
-    out.push({ file, path: entry.fullPath.replace(/^\/+/, "") });
+    try {
+      out.push({ file: await new Promise((res, rej) => entry.file(res, rej)), path });
+    } catch (e) {
+      out.push({ file: null, path, error: e });
+    }
   } else if (entry.isDirectory) {
     const reader = entry.createReader();
     for (;;) {
-      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      let batch;
+      try {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      } catch (e) {
+        out.push({ file: null, path: path + "/", error: e });
+        break;
+      }
       if (!batch.length) break;
       for (const child of batch) await filesFromEntry(child, out);
     }
@@ -316,7 +394,7 @@ function setupFolderTool(section) {
     urlInput.value = "";
     if (!/\.zip$/i.test(file.name)) { statusArea(section).error("Choose a folder or a .zip file."); return; }
     if (file.size > LIMITS.zip) {
-      statusArea(section).error("This .zip file is " + sizeText(file.size) + "; the limit is 500 MB. Leave out large data or output files that do not need checking.");
+      statusArea(section).error("This .zip file is " + sizeText(file.size) + "; the limit is 500 MB." + TOO_LARGE_ADVICE);
       return;
     }
     section.querySelector(".status").hidden = true;
@@ -326,19 +404,27 @@ function setupFolderTool(section) {
     button.disabled = false;
   }
 
-  function chooseFiles(all) {
+  async function chooseFiles(all) {
     reset();
     urlInput.value = "";
     const files = all.filter(f => !SKIP.test(f.path));
     if (!files.length) { statusArea(section).error("The folder has no files to check."); return; }
-    const total = files.reduce((s, f) => s + f.file.size, 0);
+    const total = files.reduce((s, f) => s + (f.file ? f.file.size : 0), 0);
     const ui = statusArea(section);
     if (files.length > LIMITS.files) {
       ui.error("The folder has " + files.length + " files; the limit is 20,000. Leave out folders that do not need checking, such as renv/ or node_modules/.");
       return;
     }
     if (total > LIMITS.unpacked) {
-      ui.error("The folder holds " + sizeText(total) + "; the limit is 1000 MB. Leave out large data or output files that do not need checking.");
+      ui.error("The folder holds " + sizeText(total) + "; the limit is 1000 MB." + TOO_LARGE_ADVICE);
+      return;
+    }
+    ui.progress(0, "Checking that every file can be read…");
+    text.textContent = "Reading the folder…";
+    const bad = await unreadableFiles(files, f => ui.progress(f, "Checking that every file can be read: " + Math.round(f * 100) + "%"));
+    if (bad.length) {
+      reset();
+      ui.error(unreadableMessage(bad, files.length));
       return;
     }
     section.querySelector(".status").hidden = true;
@@ -354,7 +440,8 @@ function setupFolderTool(section) {
 
   pickZip.addEventListener("change", () => { if (pickZip.files[0]) chooseZip(pickZip.files[0]); });
   pickFolder.addEventListener("change", () => {
-    chooseFiles([...pickFolder.files].map(file => ({ file, path: file.webkitRelativePath || file.name })));
+    chooseFiles([...pickFolder.files].map(file => ({ file, path: file.webkitRelativePath || file.name })))
+      .catch(err => { reset(); statusArea(section).error("The folder could not be read: " + (err.message || err)); });
   });
 
   drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("dragging"); });
@@ -378,7 +465,7 @@ function setupFolderTool(section) {
     try {
       const out = [];
       for (const entry of entries) await filesFromEntry(entry, out);
-      chooseFiles(out);
+      await chooseFiles(out);
     } catch (err) {
       reset();
       statusArea(section).error("The folder could not be read: " + (err.message || err));
@@ -399,12 +486,20 @@ function setupFolderTool(section) {
       const zip = new JSZip();
       for (const f of c.files) zip.file(f.path, f.file, { date: new Date(f.file.lastModified || Date.now()) });
       ui.progress(0, "Packing the folder…");
-      const blob = await zip.generateAsync(
-        { type: "blob", compression: "DEFLATE", compressionOptions: { level: 1 } },
-        meta => ui.progress(meta.percent / 100, "Packing the folder: " + Math.round(meta.percent) + "%")
-      );
+      let blob;
+      try {
+        blob = await zip.generateAsync(
+          { type: "blob", compression: "DEFLATE", compressionOptions: { level: 1 } },
+          meta => ui.progress(meta.percent / 100, "Packing the folder: " + Math.round(meta.percent) + "%")
+        );
+      } catch (err) {
+        // a file changed since it was chosen, or the browser ran out of memory
+        const bad = await unreadableFiles(c.files, () => {});
+        if (bad.length) throw richError(unreadableMessage(bad, c.files.length));
+        throw new Error("The browser could not pack the folder (" + (err.message || err) + "). Choose the folder again; if that does not help, pack it into a .zip yourself and choose the .zip.");
+      }
       if (blob.size > LIMITS.zip) {
-        throw new Error("The packed folder is " + sizeText(blob.size) + "; the limit is 500 MB. Leave out large data or output files that do not need checking.");
+        throw new Error("The packed folder is " + sizeText(blob.size) + "; the limit is 500 MB." + TOO_LARGE_ADVICE);
       }
       return { file: blob, filename: c.name + ".zip", name: c.name };
     }, "repocheck", fields);
