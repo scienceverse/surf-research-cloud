@@ -183,6 +183,30 @@ running <- new.env()          # job id -> callr process
   }
 }
 
+# The error for a worker that ended without writing done or failed: the R
+# process itself stopped (a crash inside a package's compiled code, or the
+# server ran out of memory), so worker.R could not say why. Says what the job
+# was doing (its step, or metacheck's last progress message) and whether R
+# crashed (worker.log has R's "caught segfault").
+.stopped_message <- function(id, st) {
+  dir <- .job_dir(id)
+  read1 <- function(f) {
+    p <- file.path(dir, f)
+    if (!file.exists(p)) return(character(0))
+    tryCatch(readLines(p, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+  }
+  progress <- read1("progress.txt")
+  doing <- if (length(progress) && grepl("\t", progress[[1]])) sub("^[^\t]*\t", "", progress[[1]]) else ""
+  if (!nzchar(doing)) doing <- st$step %||% ""
+  crashed <- any(grepl("caught segfault|caught illegal operation|caught bus error", read1("worker.log")))
+  paste0(
+    "The check stopped unexpectedly",
+    if (crashed) ": the R process that runs it crashed. This is a fault in metacheck or a package it uses, not in your files."
+    else ": the process that runs it ended (perhaps the server ran out of memory).",
+    if (nzchar(doing) && doing != "starting") paste0(" Its last step was: ", doing, ".") else "",
+    " Please report it at https://github.com/scienceverse/metacheck/issues, with the files if you can share them.")
+}
+
 .job_timeout <- function(id) {
   if (isTRUE(.read_job(id)$run_code)) SANDBOX_TIMEOUT_MINUTES else JOB_TIMEOUT_MINUTES
 }
@@ -200,8 +224,8 @@ running <- new.env()          # job id -> callr process
         rm(list = id, envir = running)
         st <- .read_status(id)
         if (!(st$status %in% c("done", "failed"))) {
+          st$error <- .stopped_message(id, st)
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
-          st$error <- "The job stopped unexpectedly."
           .write_status(id, st)
         }
         .usage_record(id, st$status)

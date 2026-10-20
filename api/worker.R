@@ -101,6 +101,11 @@ do_repocheck <- function(job_dir, job) {
       folder <- if (normalizePath(unpacked) == normalizePath(file.path(job_dir, "unpacked"))) title else basename(unpacked)
       folder <- gsub("[/[:cntrl:]]", "_", folder)
       if (folder %in% c("", ".", "..")) folder <- "folder"
+      # metacheck looks for a module in ./modules/ before the installed ones
+      # (module_find()), and the check runs from inside repo/: an upload named
+      # modules.zip holding tue_datamanager_check.R would run its own code
+      # outside the sandbox. So the folder is never called "modules".
+      if (identical(folder, "modules")) folder <- "modules_folder"
       dir.create(repo)
       file.rename(unpacked, file.path(repo, folder))
       unlink(file.path(job_dir, "unpacked"), recursive = TRUE)
