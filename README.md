@@ -535,6 +535,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_mistral_api_key`, `metacheck_groq_api_key` | `none` | keys for the app's cloud model providers (optional) |
 | `metacheck_max_upload` | `100M` | largest PDF nginx accepts |
 | `metacheck_public` | `false` | `true` opens the app and the web interface to anyone, without the SRAM login (see "A public metacheck app") |
+| `metacheck_auto_update` | `true` | `true` installs new versions of metacheck (`metacheck_ref`) and of the modules by itself (see "Installing new versions by itself"); `false` = only when the playbook runs |
 
 Secrets are generated on the workspace (`/etc/bibr/`, root only); nothing secret is
 kept in this repository or in SRC.
@@ -655,6 +656,38 @@ Use bibr directly on its workspace:
 ```
 TOKEN=$(sudo cat /etc/bibr/api_key)
 curl -X POST http://127.0.0.1:8000/papers/extract -H "Authorization: Bearer $TOKEN" -F "file=@paper.pdf"
+```
+
+## Installing new versions by itself
+
+With `metacheck_auto_update = true` (the default) the metacheck workspace keeps
+metacheck and its modules up to date with GitHub. The timer
+`metacheck-auto-update.timer` runs `/usr/local/sbin/metacheck-auto-update` 15
+minutes after the workspace starts, then 15 minutes after each run ends. When
+the branch metacheck is installed from (`metacheck_ref`, `dev`) or an installed
+module has a newer commit, the script
+
+1. waits until the web interface has no running or waiting job (at most 30
+   minutes; otherwise it tries again at the next run), because a job's R
+   process stops with the web interface;
+2. stops the web interface, so no job starts during the install;
+3. installs with the playbook's own scripts (`install-metacheck.R`,
+   `install-modules.R`, `fetch-api-helpers.sh`); when an install fails, R keeps
+   the previous version;
+4. starts the web interface again, restarts Shiny Server when metacheck changed
+   (its R processes keep the old version loaded), and checks that the web
+   interface answers.
+
+Every version on `metacheck_ref` goes live this way, also an unfinished one;
+to install only releases, set `metacheck_ref` to a tag. The script changes
+nothing else: the web interface, website and app of this repository still
+change only when the playbook runs.
+
+```
+tail -n 30 /var/log/metacheck/auto-update.log      # what it did
+systemctl list-timers metacheck-auto-update.timer  # when it runs next
+sudo metacheck-auto-update --force                 # install now, without waiting for jobs
+sudo systemctl disable --now metacheck-auto-update.timer   # switch it off until the next playbook run
 ```
 
 ## Developing these components

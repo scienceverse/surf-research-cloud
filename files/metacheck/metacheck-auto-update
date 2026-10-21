@@ -1,0 +1,125 @@
+#!/bin/bash
+# Managed by the metacheck SURF Research Cloud component.
+# Keeps metacheck and the installed modules up to date with GitHub. Run by
+# metacheck-auto-update.timer, 15 minutes after its previous run ended.
+#
+# When the branch metacheck is installed from (metacheck_ref, "dev") or an
+# installed module has a newer commit on GitHub, it
+#   1. waits until the web interface has no running or waiting job (a job's
+#      R process stops with the web interface), at most WAIT_MINUTES, else
+#      it tries again at the next run;
+#   2. stops the web interface, so no job starts during the install;
+#   3. installs with the playbook's own scripts (install-metacheck.R,
+#      install-modules.R, fetch-api-helpers.sh);
+#   4. starts the web interface again, restarts Shiny Server when metacheck
+#      changed (its R processes keep the old version loaded), and checks that
+#      the web interface answers.
+# Every step goes to /var/log/metacheck/auto-update.log.
+#
+# Settings: /etc/metacheck-auto-update.conf (written by the playbook).
+# Usage: sudo metacheck-auto-update [--force]   (--force: install even when
+# nothing is new, and do not wait for running jobs)
+set -uo pipefail
+
+CONF=/etc/metacheck-auto-update.conf
+# shellcheck source=/dev/null
+. "$CONF"
+LOG=/var/log/metacheck/auto-update.log
+FORCE=false
+[ "${1:-}" = "--force" ] && FORCE=true
+
+log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
+
+# one run at a time
+exec 9>/run/metacheck-auto-update.lock
+flock -n 9 || exit 0
+
+# the newest commit of a branch (or tag) on GitHub; empty when unreachable
+remote_sha() {
+  local url="https://github.com/$1.git" ref=$2 out
+  out=$(timeout 60 git ls-remote "$url" "refs/heads/$ref" "refs/tags/$ref^{}" "refs/tags/$ref" 2>/dev/null) || return 0
+  echo "$out" | awk 'NR == 1 { print $1 }'
+}
+
+mc_installed=$(Rscript -e 'd <- utils::packageDescription("metacheck"); cat(if (is.null(d$RemoteSha)) "" else d$RemoteSha)' 2>/dev/null || true)
+mc_remote=$(remote_sha "$METACHECK_REPO" "$METACHECK_REF")
+if [ -z "$mc_remote" ]; then
+  log "GitHub did not answer for $METACHECK_REPO@$METACHECK_REF; trying again at the next run"
+  exit 0
+fi
+mc_new=false
+[ "$mc_remote" != "$mc_installed" ] && mc_new=true
+
+# Each installed module's newest commit on the branch it was installed from
+# (what module_update() installs) against the installed commit ("repo ref
+# sha" lines); a module in the list that is not installed yet counts as new.
+mod_new=false
+if [ -n "${METACHECK_MODULES// /}" ] && [ "$METACHECK_MODULES" != "none" ]; then
+  installed_mods=$(METACHECK_MODULES_DIR="$METACHECK_MODULES_DIR" Rscript -e 'm <- metacheck::module_installed(); if (nrow(m)) cat(paste(tolower(m$repo), m$ref, m$sha), sep = "\n")' 2>/dev/null || true)
+  for repo in ${METACHECK_MODULES//,/ }; do
+    line=$(echo "$installed_mods" | awk -v r="$(echo "$repo" | tr '[:upper:]' '[:lower:]')" '$1 == r')
+    if [ -z "$line" ]; then mod_new=true; continue; fi
+    ref=$(echo "$line" | awk '{ print $2 }'); inst=$(echo "$line" | awk '{ print $3 }')
+    remote=$(remote_sha "$repo" "$ref")
+    [ -z "$remote" ] && { log "GitHub did not answer for module $repo@$ref; it is checked again at the next run"; continue; }
+    [ "$remote" != "$inst" ] && mod_new=true
+  done
+fi
+
+if ! $mc_new && ! $mod_new && ! $FORCE; then exit 0; fi
+log "new on GitHub: metacheck $mc_new (${mc_installed:0:10} -> ${mc_remote:0:10}), modules $mod_new"
+
+# 1. wait until no job runs or waits
+health() { curl -fsS --max-time 10 "http://127.0.0.1:$API_PORT/health" 2>/dev/null; }
+busy() {
+  local h
+  h=$(health) || { echo 0; return; }   # not answering: nothing to protect
+  echo "$h" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(int(d.get("jobs_running", 0)) + int(d.get("jobs_waiting", 0)))' 2>/dev/null || echo 0
+}
+if ! $FORCE; then
+  waited=0
+  while [ "$(busy)" != "0" ]; do
+    if [ "$waited" -ge "$((WAIT_MINUTES * 60))" ]; then
+      log "jobs still running or waiting after $WAIT_MINUTES minutes; trying again at the next run"
+      exit 0
+    fi
+    sleep 30; waited=$((waited + 30))
+  done
+fi
+
+# 2. no new job may start during the install
+log "stopping the web interface"
+systemctl stop metacheck-api
+
+# 3. install
+ok=true
+if $mc_new || $FORCE; then
+  log "installing metacheck from $METACHECK_REPO@$METACHECK_REF"
+  if Rscript "$COMPONENT_DIR/bin/install-metacheck.R" "$METACHECK_REPO" "$METACHECK_REF" >> "$LOG" 2>&1; then
+    "$COMPONENT_DIR/bin/fetch-api-helpers.sh" "$METACHECK_REPO" "$METACHECK_REF" "$COMPONENT_DIR" >> "$LOG" 2>&1 \
+      || { log "fetching the API helper code failed"; ok=false; }
+  else
+    # R keeps the previous version when an install fails
+    log "installing metacheck failed; the previous version stays installed"; ok=false
+  fi
+fi
+if [ -n "${METACHECK_MODULES// /}" ] && [ "$METACHECK_MODULES" != "none" ]; then
+  log "updating modules: $METACHECK_MODULES"
+  # shellcheck disable=SC2086
+  METACHECK_MODULES_DIR="$METACHECK_MODULES_DIR" Rscript "$COMPONENT_DIR/bin/install-modules.R" ${METACHECK_MODULES//,/ } >> "$LOG" 2>&1 \
+    || { log "updating the modules failed"; ok=false; }
+fi
+
+# 4. start again and check
+systemctl start metacheck-api
+if $mc_new || $FORCE; then systemctl restart shiny-server; fi
+for _ in $(seq 1 60); do
+  if h=$(health); then
+    log "the web interface answers: $h"
+    $ok && log "update done" || log "update finished with errors (see above)"
+    exit 0
+  fi
+  sleep 2
+done
+log "ERROR: the web interface does not answer after the update (sudo journalctl -u metacheck-api -n 50)"
+exit 1
