@@ -1,0 +1,13 @@
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Installs new versions of metacheck and its modules from GitHub
+# (/usr/local/sbin/metacheck-auto-update); started by metacheck-auto-update.timer.
+[Unit]
+Description=Install new versions of metacheck and its modules from GitHub
+After=network-online.target metacheck-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/metacheck-auto-update
+# waiting for jobs (at most WAIT_MINUTES) plus the install
+TimeoutStartSec=90min

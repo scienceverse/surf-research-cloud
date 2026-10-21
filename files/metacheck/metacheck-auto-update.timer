@@ -1,0 +1,13 @@
+# Managed by the metacheck SURF Research Cloud component (scienceverse/surf-research-cloud).
+# Looks for new versions of metacheck and its modules 15 minutes after the
+# workspace starts, then 15 minutes after each look ends.
+[Unit]
+Description=Look for new versions of metacheck and its modules every 15 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=15min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

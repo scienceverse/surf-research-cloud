@@ -53,6 +53,12 @@
     # "true" = the app is open to anyone, without the SRAM login; "false" =
     # SRAM login. Can be changed later with `sudo metacheck-public on|off`.
     metacheck_public: "false"
+    # "true" = install new versions of metacheck (metacheck_ref) and of the
+    # modules (metacheck_modules) from GitHub by itself: a timer looks every
+    # 15 minutes and installs when no job is running
+    # (files/metacheck/metacheck-auto-update); "false" = only when the
+    # playbook runs.
+    metacheck_auto_update: "true"
 
     # ---- fixed settings ----
     component_label: "metacheck component"
@@ -499,21 +505,17 @@
     # metacheck's API helper code (inst/plumber/utils) and its repository
     # check app (inst/app/shiny_app_repocheck, for folder checks) are not part
     # of the installed package (.Rbuildignore), so they are taken from the
-    # same repository and branch metacheck was installed from.
+    # same repository and branch metacheck was installed from. The script is
+    # shared with metacheck-auto-update.
+    - name: Copy the script that fetches metacheck's API helper code
+      ansible.builtin.copy:
+        src: files/metacheck/fetch-api-helpers.sh
+        dest: "{{ metacheck_component_dir }}/bin/fetch-api-helpers.sh"
+        mode: "0755"
+
     - name: Fetch metacheck's API helper code and repository check app
-      ansible.builtin.shell: |
-        set -e
-        tmp=$(mktemp -d)
-        git clone -q --depth 1 --filter=blob:none --sparse -b {{ metacheck_ref }} https://github.com/{{ metacheck_repo }}.git "$tmp/mc"
-        git -C "$tmp/mc" sparse-checkout set inst/plumber/utils inst/app/shiny_app_repocheck
-        api={{ metacheck_component_dir }}/api
-        for pair in "inst/plumber/utils:metacheck-plumber/utils" "inst/app/shiny_app_repocheck:metacheck-repocheck"; do
-          src="$tmp/mc/${pair%%:*}"; dest="$api/${pair#*:}"
-          if ! diff -rq "$src" "$dest" >/dev/null 2>&1; then
-            rm -rf "$dest"; cp -r "$src" "$dest"; chmod -R a+rX "$dest"; echo "changed $dest"
-          fi
-        done
-        rm -rf "$tmp"
+      ansible.builtin.command:
+        argv: ["{{ metacheck_component_dir }}/bin/fetch-api-helpers.sh", "{{ metacheck_repo }}", "{{ metacheck_ref }}", "{{ metacheck_component_dir }}"]
       register: api_helpers
       changed_when: "'changed' in api_helpers.stdout"
 
@@ -594,6 +596,43 @@
       until: api_up.status == 200
       retries: 30
       delay: 2
+
+    # ------------------------------------------------------------------
+    # Installing new versions by itself (metacheck_auto_update)
+    # ------------------------------------------------------------------
+    - name: Install the automatic update command
+      ansible.builtin.copy:
+        src: files/metacheck/metacheck-auto-update
+        dest: /usr/local/sbin/metacheck-auto-update
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the automatic update settings
+      ansible.builtin.template:
+        src: templates/metacheck/auto-update.conf.j2
+        dest: /etc/metacheck-auto-update.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the automatic update service and timer
+      ansible.builtin.copy:
+        src: "files/metacheck/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - metacheck-auto-update.service
+        - metacheck-auto-update.timer
+
+    - name: Switch automatic updates on or off (metacheck_auto_update = {{ metacheck_auto_update }})
+      ansible.builtin.systemd:
+        name: metacheck-auto-update.timer
+        enabled: "{{ metacheck_auto_update | bool }}"
+        state: "{{ 'started' if (metacheck_auto_update | bool) else 'stopped' }}"
+        daemon_reload: true
 
     # ------------------------------------------------------------------
     # nginx (only when the SRC-Nginx component configured the workspace)
