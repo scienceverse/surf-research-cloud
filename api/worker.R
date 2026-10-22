@@ -34,6 +34,23 @@ source("bibr_client.R")
   invisible(st)
 }
 
+# The time by which a job's code must be done (reproducibility_check's
+# total_timeout as a clock time, metacheck 0.4.1.5 and later): the job's time
+# limit (api.R gives it as METACHECK_JOB_LIMIT_MINUTES) from its start, minus
+# CODE_REPORT_MINUTES for the checks after the code and the report, so a job
+# whose code runs long still returns its report (metacheck #523). NULL without
+# a limit or with an older metacheck, which then keeps its own default.
+CODE_REPORT_MINUTES <- 10
+.code_deadline <- function(job_dir) {
+  limit <- suppressWarnings(as.numeric(Sys.getenv("METACHECK_JOB_LIMIT_MINUTES")))
+  if (is.na(limit) || utils::packageVersion("metacheck") < "0.4.1.5") return(NULL)
+  started <- tryCatch(jsonlite::read_json(file.path(job_dir, "status.json"))$started,
+                      error = function(e) NULL)
+  start <- if (is.null(started)) NA else as.POSIXct(started, format = "%Y-%m-%dT%H:%M:%S%z")
+  if (is.na(start)) start <- Sys.time()
+  start + (limit - CODE_REPORT_MINUTES) * 60
+}
+
 .setup_llm <- function() {
   llm_cache(FALSE)
   if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
@@ -144,6 +161,8 @@ do_repocheck <- function(job_dir, job) {
         margs$run_code <- TRUE
         margs$run_args <- list(sandbox = "docker", install_missing = FALSE,
                                docker_use_declared_version = FALSE, timeout = 300)
+        deadline <- .code_deadline(job_dir)
+        if (!is.null(deadline)) margs$run_args$total_timeout <- deadline
         options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
         Sys.umask("000")   # see below: the sandbox's user writes into these folders
       }
@@ -171,6 +190,8 @@ do_repocheck <- function(job_dir, job) {
       args$reproducibility_check <- c(list(
         execute = TRUE, sandbox = "docker", install_missing = FALSE,
         docker_use_declared_version = FALSE, timeout = 300), code_place)
+      deadline <- .code_deadline(job_dir)
+      if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
       options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
       # The sandbox's user (an unused id on this server) must be able to write
       # into the folders metacheck makes for it; they lie inside this job's
@@ -211,6 +232,8 @@ do_repocheck <- function(job_dir, job) {
     reproducibility_check = c(list(
       execute = TRUE, sandbox = "docker", install_missing = FALSE,
       docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
+  deadline <- .code_deadline(job_dir)
+  if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
   progress <- file.path(job_dir, "progress.txt")
   on.exit(unlink(c(progress, file.path(job_dir, "cache")), recursive = TRUE), add = TRUE)
   options(shiny_progress_file = progress,

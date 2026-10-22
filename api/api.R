@@ -157,7 +157,10 @@ running <- new.env()          # job id -> callr process
     # folders, are made there), and its `docker` is the guard's command.
     tmp <- file.path(SANDBOX_ROOT, id, "tmp")
     dir.create(tmp, recursive = TRUE, mode = "0700")
+    # METACHECK_JOB_LIMIT_MINUTES: the worker ends the code run in time for the
+    # report (worker.R, .code_deadline())
     env <- c(env, TMPDIR = tmp, METACHECK_JOB_ID = id,
+             METACHECK_JOB_LIMIT_MINUTES = SANDBOX_TIMEOUT_MINUTES,
              PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":"))
   }
   running[[id]] <- callr::r_bg(

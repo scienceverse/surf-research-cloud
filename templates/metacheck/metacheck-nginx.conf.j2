@@ -116,6 +116,20 @@ location /api/ {
     # (api.R checks each limit)
     client_max_body_size 505M;
     error_page 413 = @metacheck_api_413;
+    # the interface is not running: being updated (metacheck-auto-update stops
+    # it while it installs) or restarted (surf-research-cloud #9)
+    error_page 502 = @metacheck_api_503;
+}
+
+# The interface not running, answered as JSON with a time to try again, so
+# programs and web pages can show the message instead of nginx's own page.
+location @metacheck_api_503 {
+    default_type application/json;
+{% if metacheck_nginx_public | bool %}
+    add_header Access-Control-Allow-Origin "*" always;
+{% endif %}
+    add_header Retry-After 120 always;
+    return 503 '{"error":"The server is being updated or restarted. Try again in a few minutes."}';
 }
 
 # Uploads over the size limit, answered as JSON like the interface's own errors.
