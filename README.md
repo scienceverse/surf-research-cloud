@@ -168,7 +168,7 @@ here they use this workspace's web interface.
 
 | Address | Page | What it sends | Report |
 |---|---|---|---|
-| `/psyarxiv/` | `site/psyarxiv/` | `kind=report`, `psyarxiv=<id>`, `report_type=checklist`, every module in `GET /modules` `allowed`; optional `crossref`, `run_code` | metacheck's checklist report on the paper, after the page's own checks of the PsyArXiv record (open data reachable, preregistration, license, conflict of interest, ORCID iDs), read in the browser from PsyArXiv's API |
+| `/psyarxiv/` | `site/psyarxiv/` | `kind=report`, `psyarxiv=<id>`, `report_type=checklist`, every module in `GET /modules` `allowed` (without `ref_accuracy` unless `crossref` is ticked); optional `crossref`, `run_code` | metacheck's checklist report on the paper, after the page's own checks of the PsyArXiv record (open data reachable, preregistration, license, conflict of interest, ORCID iDs), read in the browser from PsyArXiv's API |
 | `/researchbox/` | `site/researchbox/` | `kind=repocheck`, `url=https://researchbox.org/<n>`, `report_type=checklist`, `run_code` | metacheck's checklist report on the box's data and code |
 | `/datamanager/` | `site/datamanager/` | as on the TU/e server: `kind=repocheck`, `modules=tue_datamanager_check` | the TU/e module's own checklist report |
 
@@ -188,7 +188,9 @@ Every hour, `metacheck-psyarxiv-reports.timer` runs `api/psyarxiv-reports-genera
 as the shiny user: for each of the `metacheck_psyarxiv_reports` (default 10) newest
 PsyArXiv preprints without a report for its current version, it asks this server's
 web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
-`report_type=checklist`, every allowed module), one at a time, and keeps it in
+`report_type=checklist`, every allowed module, `crossref=true`: preprints are public,
+and the reference checks need the Crossref lookup; set `bibr_crossref_email` on the
+bibr server so Crossref answers at its faster rate), one at a time, and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 

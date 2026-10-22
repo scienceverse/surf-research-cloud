@@ -2,7 +2,8 @@
 // API (read in the browser: the API allows any website), with checks of the
 // record itself, and metacheck's checklist report on the paper from this
 // server (POST /api/jobs, kind=report, psyarxiv=<id>, report_type=checklist,
-// every paper module this server offers). The server fetches the PDF itself:
+// every paper module this server offers, without ref_accuracy when the
+// Crossref box is not ticked: it needs the Crossref lookup). The server fetches the PDF itself:
 // PsyArXiv's files send no CORS header, so a page cannot fetch them.
 "use strict";
 
@@ -153,14 +154,16 @@ setupLinkCheck(document.getElementById("tool-psyarxiv"), {
   async fields(id, section) {
     const rec = await record(id);   // stops here with PsyArXiv's message for an unknown id
     if (rec.state === "withdrawn") throw new Error("This preprint was withdrawn from PsyArXiv; it has no file to check.");
+    const crossref = section.querySelector("input.crossref-box").checked;
     const fields = {
       kind: "report",
       psyarxiv: id,
       report_type: "checklist",
-      crossref: section.querySelector("input.crossref-box").checked ? "true" : "false",
+      crossref: crossref ? "true" : "false",
       run_code: section.querySelector("input.run-code").checked ? "true" : "false"
     };
-    if (allowedModules && allowedModules.length) fields.modules = allowedModules.join(",");
+    const modules = (allowedModules || []).filter(m => crossref || m !== "ref_accuracy");
+    if (modules.length) fields.modules = modules.join(",");
     return fields;
   },
   filename: id => "psyarxiv_" + id + "_metacheck.html"
