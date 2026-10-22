@@ -602,6 +602,7 @@ later::later(.scheduler, 1)
 #* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back, or a .zip of a data and code folder and get a report on it. PDFs are converted with bibr on SURF Research Cloud. Uploads are deleted once processed, results one hour after they are finished.
 
 source(file.path(API_DIR, "bibr_client.R"))
+source(file.path(API_DIR, "psyarxiv_reports.R"))
 # bibr's readiness, asked at most every 10 seconds (bibr can be slow to answer
 # while it converts).
 .bibr_cache <- new.env()
@@ -743,3 +744,55 @@ function(req, res) .one_call(req, res, "convert")
 #* @param modules An installed module to run on the .zip or link instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
 #* @param human_participants For an installed module: "true" or "false" when you know whether people took part or personal data was used (optional; the module decides otherwise)
 function(req, res) .one_call(req, res, "repocheck")
+
+# ---- PsyArXiv reports (prototype; see psyarxiv_reports.R) ---------------------
+
+#* PsyArXiv reports: the preprints with a report, newest first
+#* @get /psyarxiv-reports
+#* @serializer unboxedJSON
+function(res) {
+  if (!.pr_on()) { res$status <- 404; return(list(error = "PsyArXiv reports are not switched on on this server.")) }
+  list(reports = lapply(.pr_list(), function(m) m[c("id", "version", "title", "authors", "posted", "generated", "metacheck_version")]))
+}
+
+#* PsyArXiv reports: one preprint's report details; with `key`, also whether that delete key is valid
+#* @get /psyarxiv-reports/<id>
+#* @param key a delete key (optional)
+#* @serializer unboxedJSON
+function(id, key = "", res) {
+  meta <- .pr_meta(id)
+  if (is.null(meta)) {
+    res$status <- 404
+    deleted <- .pr_valid_id(id) && file.exists(file.path(PR_DIR, "deleted", paste0(id, ".json")))
+    return(list(error = if (deleted) "This report was deleted." else "There is no report for this preprint (yet).",
+                deleted = deleted))
+  }
+  c(meta, list(report_url = paste0("/psyarxiv-reports-files/", id, ".html"),
+               key_valid = if (nzchar(key)) .pr_key_ok(id, key) else NULL))
+}
+
+#* PsyArXiv reports: tell us the report contains mistakes (JSON or form: message, email)
+#* @post /psyarxiv-reports/<id>/feedback
+#* @parser json
+#* @parser form
+#* @param message what is wrong (optional)
+#* @param email the sender's email address, if we may reply (optional)
+#* @serializer unboxedJSON
+function(id, message = "", email = "", req, res) {
+  mailed <- tryCatch(.pr_feedback(id, message, email, req), error = function(e) e)
+  if (inherits(mailed, "error")) return(.error_response(res, mailed))
+  res$status <- 202
+  list(saved = TRUE, mailed = mailed)
+}
+
+#* PsyArXiv reports: delete a report, with the key from the mail's delete link
+#* @post /psyarxiv-reports/<id>/delete
+#* @parser json
+#* @parser form
+#* @param key the delete key
+#* @serializer unboxedJSON
+function(id, key = "", res) {
+  meta <- tryCatch(.pr_delete(id, key), error = function(e) e)
+  if (inherits(meta, "error")) { res$status <- 403; return(list(error = conditionMessage(meta))) }
+  list(deleted = TRUE, id = id, title = meta$title)
+}

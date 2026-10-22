@@ -25,6 +25,23 @@ location /site/ {
     add_header Cache-Control "no-cache";
 }
 
+# PsyArXiv reports (prototype): the stored reports, shown by the page
+# site/psyarxiv-reports/ (at /psyarxiv-reports/). Same login as the website;
+# the .json details next to each report are not served here (the web
+# interface gives them).
+location /psyarxiv-reports-files/ {
+{% if metacheck_nginx_public | bool %}
+    # Open to anyone (static reports).
+{% else %}
+    error_page 401 = @custom_401;
+    auth_request /validate;
+{% endif %}
+    alias {{ metacheck_psyarxiv_reports_dir }}/reports/;
+    autoindex off;
+    location ~ \.json$ { deny all; }
+    add_header Cache-Control "no-cache";
+}
+
 # metacheck paper report app (Shiny Server on port {{ metacheck_shiny_port }}).
 location /metacheck/ {
 {% if metacheck_nginx_public | bool %}

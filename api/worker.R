@@ -249,22 +249,34 @@ do_repocheck <- function(job_dir, job) {
   rec <- httr2::resp_body_json(resp, simplifyVector = FALSE)
   if (identical(rec$state, "withdrawn")) stop("This preprint was withdrawn from PsyArXiv; it has no file to check.", call. = FALSE)
   v <- if (length(rec$versions)) rec$versions[[1]] else list()
+  # fileUrl is normally relative to PsyArXiv's site; an absolute one is
+  # accepted only on that site (seen once in a batch on 22 October 2026)
   src <- rec$fileUrl %||% v$fileUrl
-  src <- if (!is.null(src) && startsWith(src, "/")) paste0(site, src) else NULL
+  src <- if (is.null(src)) NULL
+         else if (startsWith(src, "/")) paste0(site, src)
+         else if (startsWith(src, paste0(site, "/"))) src
+         else NULL
   if (is.null(src) && is.character(v$osfFileUrl) && startsWith(v$osfFileUrl, "https://osf.io/")) src <- v$osfFileUrl
   if (is.null(src)) stop("This preprint has no file to check on PsyArXiv.", call. = FALSE)
-  if (!identical(tolower(v$contentType %||% "application/pdf"), "application/pdf")) {
-    stop("This preprint's file is not a PDF (", v$contentType, "); metacheck reads PDFs.", call. = FALSE)
-  }
-  pdf <- file.path(job_dir, "input.pdf")
+  # About one in four PsyArXiv preprints is a Word file (.docx, uploaded to
+  # the OSF as such). bibr reads .docx itself (natively, from the document's
+  # structure), so it is sent on as it is; an old .doc it refuses.
+  type <- tolower(v$contentType %||% "application/pdf")
+  ext <- if (identical(type, "application/pdf")) ".pdf"
+         else if (identical(type, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) ".docx"
+         else stop("This preprint's file is a ", v$contentType, " file; metacheck reads PDF and Word (.docx) files.", call. = FALSE)
+  dest <- file.path(job_dir, paste0("input", ext))
   httr2::request(src) |>
     httr2::req_headers(`User-Agent` = ua) |>
     httr2::req_timeout(300) |>
     httr2::req_retry(max_tries = 3) |>
-    httr2::req_perform(path = pdf)
-  if (file.size(pdf) > 50 * 1024^2) stop("The preprint's PDF is larger than 50 MB.", call. = FALSE)
-  if (!identical(readBin(pdf, "raw", 4), charToRaw("%PDF"))) stop("The file PsyArXiv sent is not a PDF.", call. = FALSE)
-  list(path = pdf, title = rec$title %||% "", version = rec$version %||% NA)
+    httr2::req_perform(path = dest)
+  if (file.size(dest) > 50 * 1024^2) stop("The preprint's file is larger than 50 MB.", call. = FALSE)
+  head4 <- readBin(dest, "raw", 4)
+  ok <- if (ext == ".pdf") identical(head4, charToRaw("%PDF"))
+        else identical(head4, as.raw(c(0x50, 0x4b, 0x03, 0x04)))   # a .docx is a zip
+  if (!ok) stop("The file PsyArXiv sent is not the ", sub("^.", "", ext), " file it says it is.", call. = FALSE)
+  list(path = dest, ext = ext, title = rec$title %||% "", version = rec$version %||% NA)
 }
 
 # metacheck's checklist report (report_type = "checklist") from module results
@@ -310,23 +322,26 @@ do_job <- function(job_dir) {
     if (job$kind == "repocheck") return(do_repocheck(job_dir, job))
     .setup_llm()
 
-    # 0. a PsyArXiv preprint: fetch its PDF, then go on as for an uploaded PDF
+    # 0. a PsyArXiv preprint: fetch its file (PDF, or a Word .docx, which bibr
+    # reads too), then go on as for an uploaded PDF
+    ext <- ".pdf"
     if (identical(job$input_kind, "psyarxiv")) {
       .set_status(job_dir, step = "fetching the preprint from PsyArXiv")
       pp <- .fetch_psyarxiv(job$psyarxiv, job_dir)
       unlink(input)
       input <- pp$path
+      ext <- pp$ext
       job$input_kind <- "pdf"
     }
 
-    # 1. bibr JSON: convert the PDF, or use the uploaded JSON
+    # 1. bibr JSON: convert the PDF (or .docx), or use the uploaded JSON
     if (job$input_kind == "pdf") {
-      .set_status(job_dir, step = "converting the PDF with bibr")
+      .set_status(job_dir, step = if (ext == ".docx") "converting the Word file with bibr" else "converting the PDF with bibr")
       # bibr uses Crossref only when asked (it sends the reference list there)
       # writes <job_dir>/input.json, with the upload's own name in it (the
       # upload is saved as input.pdf; job$name is its name without extension)
       json <- bibr_convert(input, job_dir, crossref = isTRUE(job$crossref),
-                           file_name = if (nzchar(job$name %||% "")) paste0(job$name, ".pdf") else NULL)
+                           file_name = if (nzchar(job$name %||% "")) paste0(job$name, ext) else NULL)
     } else {
       json <- input
     }
