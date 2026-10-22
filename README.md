@@ -195,20 +195,24 @@ web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
 - **`/psyarxiv-reports/`** (`site/psyarxiv-reports/`) lists the reports;
   **`/psyarxiv-reports/?id=<id>`** shows one, under a bar with the preprint's title,
   version and date, the metacheck version, and *"If the report contains mistakes,
-  let us know."* with a **Report a mistake** button. This is the address PsyArXiv
-  could link to. The report itself is a static file at `/psyarxiv-reports-files/<id>.html`.
-- **Report a mistake** asks what is wrong and, optionally, the reader's email
-  address (`POST /api/psyarxiv-reports/<id>/feedback`, at most 5 an hour per
-  visitor). The message is saved in `feedback/` and mailed to `metacheck_mail_to`
-  through `metacheck_smtp_url` (with `metacheck_smtp_user`/`_password`), with the
-  report attached and a red **Delete this report** button.
-- The button opens **`/psyarxiv-reports/?delete=<id>&key=<key>`**, which asks for
-  confirmation (`POST /api/psyarxiv-reports/<id>/delete`). The key is an HMAC of the
-  id with a secret made once on the workspace
+  let us know."* with two links: **Report a mistake by email** (a mail to
+  metacheck.scienceverse@gmail.com) and **Report a mistake on GitHub** (a new issue on
+  scienceverse/metacheck), both with the preprint and the report's address filled
+  in (`MISTAKE_MAIL` and `MISTAKE_ISSUES` in `site/psyarxiv-reports/reports.js`).
+  This is the address PsyArXiv could link to. The report itself is a static file at
+  `/psyarxiv-reports-files/<id>.html`.
+- Not in use yet (no SMTP account): the web interface can also take a message
+  (`POST /api/psyarxiv-reports/<id>/feedback`, at most 5 an hour per visitor), save
+  it in `feedback/` and mail it to `metacheck_mail_to` through `metacheck_smtp_url`
+  (with `metacheck_smtp_user`/`_password`), with the report attached and a red
+  **Delete this report** button. That button opens
+  **`/psyarxiv-reports/?delete=<id>&key=<key>`**, which asks for confirmation
+  (`POST /api/psyarxiv-reports/<id>/delete`). The key is an HMAC of the id with a
+  secret made once on the workspace
   (`/opt/metacheck-component/psyarxiv-reports.secret`), so only links from those
   mails can delete. A deleted report leaves `deleted/<id>.json` and is not made again.
-- Without mail settings the messages are only saved; read them with
-  `sudo ls <storage volume>/psyarxiv-reports/feedback/`.
+  The page has no form for it now; to use it, set the mail settings and bring back
+  the form (git history of `site/psyarxiv-reports/`).
 - A preprint whose file is a Word document (`.docx`, about one in four new ones) is
   sent to bibr as it is: bibr reads .docx natively. An old `.doc` (none in a sample of
   200 preprints from 2017 to 2026) is refused.
