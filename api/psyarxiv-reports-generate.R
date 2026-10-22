@@ -3,7 +3,8 @@
 # the PSYARXIV_REPORTS_NEWEST newest PsyArXiv preprints that has none yet for
 # its current version (and was not deleted through a delete link), through
 # this server's own web interface (POST /jobs, kind=report, psyarxiv=<id>,
-# report_type=checklist, every allowed module, one job at a time). Writes
+# report_type=checklist, every allowed module, run_code=true, one job at a
+# time). Writes
 # <PSYARXIV_REPORTS_DIR>/reports/<id>.html and <id>.json; see
 # psyarxiv_reports.R. Run as shiny by metacheck-psyarxiv-reports.timer.
 
@@ -40,7 +41,10 @@ for (p in newest) {
   res <- tryCatch({
     resp <- httr2::request(paste0(API, "/jobs")) |>
       httr2::req_body_multipart(kind = "report", psyarxiv = id, report_type = "checklist",
-                                modules = paste(modules, collapse = ","), source = "code") |>
+                                modules = paste(modules, collapse = ","), source = "code",
+                                # also run the code of the paper's repository in the
+                                # sandbox (reproducibility_check), where the server has one
+                                run_code = "true") |>
       httr2::req_error(is_error = function(r) FALSE) |> httr2::req_perform()
     job <- httr2::resp_body_json(resp)
     if (httr2::resp_status(resp) == 503) stop("the queue is full")
