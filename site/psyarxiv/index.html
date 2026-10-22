@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PsyArXiv Check</title>
+<meta name="description" content="Paste a PsyArXiv link and get metacheck's checklist report on the preprint: what to fix and what to improve.">
+<link rel="icon" type="image/png" href="/site/images/logo.png">
+<link rel="stylesheet" href="/site/site.css">
+<link rel="stylesheet" href="/site/check-pages.css">
+</head>
+<body>
+
+<header class="masthead">
+  <img class="logo" src="/site/images/logo.png" alt="Metacheck logo" width="76" height="88">
+  <h1>Metacheck</h1>
+  <p class="subtitle">PsyArXiv Check: a preprint, checked the way a careful reviewer would</p>
+</header>
+
+<main>
+  <p class="intro">Paste the link to a preprint on PsyArXiv and receive a checklist of what to fix and what to improve, with every automated check metacheck has: statistics, p-values, effect sizes, power analyses, ethics statements, preregistrations, references, and the data and code the paper links to. The record on PsyArXiv is checked too: whether the open data can be reached, the license, ORCID iDs and the conflict of interest statement. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands.</p>
+
+  <div class="columns single">
+    <section class="tool" id="tool-psyarxiv">
+      <h2>Check a PsyArXiv Preprint</h2>
+      <p class="lead">Paste a link to the preprint, its DOI, or its id.</p>
+      <label class="repo-link"><span>PsyArXiv link</span>
+        <input type="url" class="repo-url" placeholder="https://next.psyarxiv.org/preprint/28j7s" autocomplete="off">
+      </label>
+      <p class="note">For example https://next.psyarxiv.org/preprint/28j7s, https://osf.io/preprints/psyarxiv/28j7s or 10.31234/osf.io/28j7s.</p>
+      <label class="crossref"><input type="checkbox" class="crossref-box"> Look up the references at Crossref <span class="note">(sends the reference list to Crossref in the USA; needed for the reference checks)</span></label>
+      <label class="crossref"><input type="checkbox" class="run-code"> Also run the code in the paper's repository <span class="note">(in a closed sandbox; can take several minutes)</span></label>
+      <button type="button" class="go" disabled>Check the preprint</button>
+      <div class="status" hidden></div>
+      <p class="note server-note"></p>
+    </section>
+  </div>
+
+  <div class="record-box" hidden></div>
+
+  <section class="about">
+    <h2>What happens</h2>
+    <p>Your browser reads the preprint's record from PsyArXiv. The metacheck server then fetches the PDF from PsyArXiv, checks it, and keeps the report for one hour; a report can only be fetched with its random job number, which only your browser knows. Preprints on PsyArXiv are public. With the Crossref box ticked, the paper's reference list is sent to Crossref (USA). Automated checks miss things and flag things that are fine: read every finding as a question, not a verdict. Other checks: <a href="/site/">papers and repositories</a>, <a href="/site/researchbox/">ResearchBox</a>, <a href="/site/datamanager/">the TU/e data manager check</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <p>Built on <a href="https://www.scienceverse.org/metacheck/" target="_blank" rel="noopener">Metacheck</a>, open source software by <a href="https://github.com/scienceverse" target="_blank" rel="noopener">scienceverse</a>, and the <a href="https://next.psyarxiv.org/api" target="_blank" rel="noopener">PsyArXiv API</a>. <span id="version"></span></p>
+</footer>
+
+<script src="/site/check-link.js"></script>
+<script src="/site/psyarxiv/psyarxiv.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+/* TU/e Data Manager Check page (tue_datamanager_check, web/): the few rules
+   it adds to the metacheck website's own style sheet (site.css, copied from
+   scienceverse/surf-research-cloud's site/). */
+
+/* metacheck's logo and TU/e's side by side above the title */
+.logos { display: flex; justify-content: center; align-items: center; gap: 28px; margin: 0 auto 10px; }
+.logos .logo { margin: 0; }
+.logo-tue { display: block; width: 112px; height: auto; }
+
+/* one card, as wide as one of the website's three columns, centred */
+.columns.single { grid-template-columns: minmax(0, 378px); justify-content: center; }
+@media (max-width: 900px) {
+  .columns.single { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* the question whether people took part, in the style of the website's tick boxes */
+.people { border: 0; padding: 0; margin: 4px 0 4px; min-width: 0; }
+.people legend { font-weight: 600; font-size: 0.95rem; padding: 0; margin-bottom: 4px; }
+.people .crossref { margin: 0 0 6px; }
+
+.note.warning { color: var(--error); }
+
+/* an error with an explanation: paragraphs and lists (files the browser cannot read) */
+.error p { margin: 0 0 6px; }
+.error ul { margin: 0 0 8px; padding-left: 20px; }
+.error li { overflow-wrap: anywhere; margin-bottom: 2px; }
+.server-note { margin: 12px 0 0; overflow-wrap: anywhere; }
