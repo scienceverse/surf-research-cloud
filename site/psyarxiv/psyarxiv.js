@@ -2,8 +2,7 @@
 // API (read in the browser: the API allows any website), with checks of the
 // record itself, and metacheck's checklist report on the paper from this
 // server (POST /api/jobs, kind=report, psyarxiv=<id>, report_type=checklist,
-// every paper module this server offers, without ref_accuracy when the
-// Crossref box is not ticked: it needs the Crossref lookup). The server fetches the PDF itself:
+// every paper module this server offers). The server fetches the PDF itself:
 // PsyArXiv's files send no CORS header, so a page cannot fetch them.
 "use strict";
 
@@ -162,7 +161,7 @@ setupLinkCheck(document.getElementById("tool-psyarxiv"), {
       crossref: crossref ? "true" : "false",
       run_code: section.querySelector("input.run-code").checked ? "true" : "false"
     };
-    const modules = (allowedModules || []).filter(m => crossref || m !== "ref_accuracy");
+    const modules = allowedModules || [];
     if (modules.length) fields.modules = modules.join(",");
     return fields;
   },
