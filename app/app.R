@@ -245,7 +245,7 @@ report_slot_release <- function(slot) {
 # online repositories, since local_path is never set here).
 VALIDATED_MODULES <- c(
   "power", "marginal", "prereg_check", "ethics_check",
-  "ref_pubpeer", "ref_retraction", "ref_replication", "ref_accuracy",
+  "ref_pubpeer", "ref_retraction", "ref_replication",
   "stat_check", "stat_p_exact", "stat_p_nonsig", "stat_effect_size",
   "repo_check", "code_check", "data_check", "codebook_check"
 )
@@ -808,8 +808,6 @@ server <- function(input, output, session) {
     use_crossref <- isTRUE(input$query_crossref)
     modules <- VALIDATED_MODULES
     if (!isTRUE(input$query_pubpeer)) modules <- setdiff(modules, "ref_pubpeer")
-    # ref_accuracy needs the CrossRef bib_match table to compare against
-    if (!use_crossref) modules <- setdiff(modules, "ref_accuracy")
     # prereg_check also contacts the OSF and AsPredicted, so it goes too
     # (metacheck #495; the checkbox description names the OSF).
     if (!isTRUE(input$query_repos))
