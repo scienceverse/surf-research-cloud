@@ -1,12 +1,15 @@
 // PsyArXiv reports page (prototype; site/psyarxiv-reports/, at /psyarxiv-reports/):
 //   no parameters        the list of reports (GET /api/psyarxiv-reports)
 //   ?id=<id>             one report, with "If the report contains mistakes,
-//                        let us know" and a button (POST .../feedback)
-//   ?delete=<id>&key=... the delete page that the mailed delete button opens
-//                        (POST .../delete with the key)
+//                        let us know" and two links: a mail to MISTAKE_MAIL and
+//                        a new GitHub issue, both with the preprint filled in
+//   ?delete=<id>&key=... the delete page for links from mails (POST .../delete
+//                        with the key); no mails are sent yet (no SMTP account)
 // The reports themselves are static files at /psyarxiv-reports-files/<id>.html.
 "use strict";
 
+const MISTAKE_MAIL = "metacheck.scienceverse@gmail.com";
+const MISTAKE_ISSUES = "https://github.com/scienceverse/metacheck/issues/new";
 const API = (new URLSearchParams(location.search).get("api") || (location.origin + "/api")).replace(/\/+$/, "");
 const FILES = API.replace(/\/api$/, "") + "/psyarxiv-reports-files/";
 const params = new URLSearchParams(location.search);
@@ -53,8 +56,13 @@ async function showReport(id) {
   try { m = await getJson(API + "/psyarxiv-reports/" + id); }
   catch (e) { message(e.data && e.data.deleted ? "Report removed" : "No report", e.message); return; }
   document.title = (m.title || id) + " · metacheck report";
-  const button = el("button", { type: "button", class: "mistake-button" }, "Report a mistake");
-  button.addEventListener("click", () => openMistake(id));
+  const subject = "Mistake in the metacheck report on PsyArXiv " + id + ", version " + m.version;
+  const body = "Report: " + location.origin + location.pathname + "?id=" + id +
+    "\nPreprint: " + (m.title || id) + "\n\nWhich check, and what is wrong:\n";
+  const mail = el("a", { class: "mistake-button", href: "mailto:" + MISTAKE_MAIL +
+    "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body) }, "Report a mistake by email");
+  const issue = el("a", { class: "mistake-button", target: "_blank", rel: "noopener", href: MISTAKE_ISSUES +
+    "?title=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body) }, "Report a mistake on GitHub");
   view.replaceChildren(
     el("div", { class: "report-bar" },
       el("div", { class: "report-info" },
@@ -64,33 +72,8 @@ async function showReport(id) {
           " with metacheck " + (m.metacheck_version || "") + " · ",
           el("a", { href: m.url, target: "_blank", rel: "noopener" }, "the preprint on PsyArXiv"))),
       el("div", { class: "report-feedback" },
-        el("span", {}, "If the report contains mistakes, let us know."), button)),
+        el("span", {}, "If the report contains mistakes, let us know."), mail, issue)),
     el("iframe", { class: "report-frame", src: FILES + id + ".html", title: "metacheck report" }));
-}
-
-function openMistake(id) {
-  const dlg = document.getElementById("mistake");
-  const form = document.getElementById("mistake-form");
-  const status = dlg.querySelector(".dialog-status");
-  const send = document.getElementById("mistake-send");
-  status.textContent = ""; send.disabled = false; form.reset();
-  document.getElementById("mistake-cancel").onclick = () => dlg.close();
-  form.onsubmit = async e => {
-    e.preventDefault();
-    send.disabled = true; status.textContent = "Sending…";
-    try {
-      const r = await fetch(API + "/psyarxiv-reports/" + id + "/feedback", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: form.message.value, email: form.email.value }) });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-      status.textContent = "Thank you. Your message was sent to the people who run these reports; they will look at the report, and correct or remove it.";
-      setTimeout(() => dlg.close(), 4000);
-    } catch (err) {
-      status.textContent = err.message; send.disabled = false;
-    }
-  };
-  dlg.showModal();
 }
 
 async function showDelete(id, key) {
