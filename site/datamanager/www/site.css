@@ -1,0 +1,238 @@
+/* metacheck website (SURF Research Cloud component, scienceverse/surf-research-cloud).
+   Colours: metacheck's logo green and a light grey. Font: Cabin, a humanist
+   sans serif (SIL Open Font License, fonts/OFL-Cabin.txt), served from this
+   server so visitors' browsers contact no other site. */
+
+@font-face {
+  font-family: "Cabin";
+  src: url("fonts/Cabin.ttf") format("truetype");
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cabin";
+  src: url("fonts/Cabin-Italic.ttf") format("truetype");
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --green: #2F6F1C;        /* the logo's green */
+  --green-dark: #1E4A10;
+  --green-light: #59935B;  /* the app's green */
+  --green-tint: #E3ECDF;
+  --bg: #E9E8E5;           /* light grey page */
+  --card: #F4F3F1;
+  --line: #CFCDC8;
+  --text: #262624;
+  --muted: #5E5C58;
+  --error: #9B2C1F;
+  --error-tint: #F6E3DF;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--bg); }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Cabin", "Gill Sans", "Gill Sans MT", "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--green); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--green-dark); }
+code, pre { font-family: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; font-size: 0.85em;
+            font-variant-ligatures: none; }
+
+/* ---- title ---- */
+.masthead {
+  text-align: center;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 40px 16px 0;
+}
+.logo { display: block; margin: 0 auto 10px; width: 76px; height: auto; }
+.masthead h1 {
+  margin: 0;
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+.subtitle {
+  margin: 4px auto 0;
+  padding-bottom: 18px;
+  font-size: 1.2rem;
+  font-weight: 500;
+  color: var(--muted);
+  border-bottom: 1px solid var(--green);
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+
+/* ---- introduction with a drop capital ---- */
+.intro {
+  max-width: 820px;
+  margin: 28px auto 36px;
+  text-align: justify;
+  hyphens: auto;
+}
+.intro::first-letter {
+  float: left;
+  font-size: 4.6em;
+  line-height: 0.82;
+  font-weight: 400;
+  margin: 0.06em 0.08em 0 0;
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .intro { text-align: left; }
+}
+
+/* ---- three columns ---- */
+.columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .columns { grid-template-columns: minmax(0, 1fr); }
+}
+
+.tool {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--green);
+  border-radius: 4px;
+  padding: 18px 22px 22px;
+  min-width: 0;
+}
+.tool h2 {
+  margin: 4px 0 12px;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.tool p { margin: 0 0 14px; }
+.note { font-size: 0.88rem; color: var(--muted); }
+
+/* ---- file choice ---- */
+.drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 110px;
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 2px dashed var(--green-light);
+  border-radius: 4px;
+  background: #FAFAF8;
+  text-align: center;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.drop:hover, .drop.dragging { background: var(--green-tint); border-color: var(--green); }
+.drop.has-file { border-style: solid; background: var(--green-tint); }
+.drop input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop-text { font-weight: 500; }
+.drop-folder { cursor: default; }
+.drop-buttons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.small-button {
+  position: relative;
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid var(--green);
+  border-radius: 3px;
+  color: var(--green);
+  background: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.small-button:hover { background: var(--green); color: #fff; }
+.small-button input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+.repo-link { display: block; margin: 4px 0 4px; font-weight: 600; font-size: 0.95rem; }
+.repo-link input {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--green-light); border-radius: 3px; background: #fff;
+  font: inherit; font-weight: 400;
+}
+.repo-link input:focus { outline: 2px solid var(--green); outline-offset: 0; }
+
+/* ---- module choice ---- */
+.checks { margin: 0 0 14px; }
+.checks summary { cursor: pointer; font-weight: 600; color: var(--green); }
+.checks-count { font-weight: 400; color: var(--muted); }
+.check-list { margin-top: 8px; }
+.check-list h3 { font-size: 0.95rem; margin: 10px 0 4px; }
+.check-list label { display: flex; gap: 8px; align-items: baseline; font-size: 0.92rem; margin: 2px 0; }
+.check-list input { accent-color: var(--green); }
+
+.crossref { display: block; margin: 0 0 14px; font-size: 0.92rem; }
+.crossref input { accent-color: var(--green); }
+
+/* ---- buttons ---- */
+button.go, a.result-button {
+  display: inline-block;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--green);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+button.go:hover, a.result-button:hover { background: var(--green-dark); color: #fff; }
+button.go:disabled { background: #A9B4A4; cursor: not-allowed; }
+a.result-button.secondary { background: #fff; color: var(--green); border: 1px solid var(--green); }
+a.result-button.secondary:hover { background: var(--green-tint); color: var(--green-dark); }
+
+/* ---- progress and results ---- */
+.status { margin-top: 14px; }
+.status .step { font-size: 0.92rem; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--green); transition: width 0.4s; }
+.bar.unknown > span { width: 30%; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+.results { display: grid; gap: 8px; margin-top: 12px; }
+.error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--error);
+  background: var(--error-tint);
+  color: var(--error);
+  font-size: 0.92rem;
+}
+
+/* ---- about and footer ---- */
+.about { max-width: 820px; margin: 48px auto 0; }
+.about h2 { font-size: 1.25rem; margin: 28px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+pre { background: var(--card); border: 1px solid var(--line); padding: 10px 12px; overflow-x: auto; border-radius: 3px; }
+footer {
+  max-width: 820px;
+  margin: 48px auto 0;
+  padding: 16px 16px 40px;
+  border-top: 1px solid var(--green);
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+}

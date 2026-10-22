@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TU/e Data Manager Check</title>
+<meta name="description" content="Check a research data package against TU/e's archiving guidelines, the way TU/e's data managers do, with metacheck on SURF Research Cloud.">
+<link rel="icon" type="image/png" href="www/images/logo.png">
+<link rel="stylesheet" href="www/site.css">
+<link rel="stylesheet" href="www/tdc.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="logos">
+    <img class="logo" src="www/images/logo.png" alt="Metacheck logo" width="76" height="88">
+    <img class="logo-tue" src="www/images/tuelogo.png" alt="TU/e logo" width="112" height="56">
+  </div>
+  <h1>Metacheck</h1>
+  <p class="subtitle">TU/e Data Manager Check: a data package against TU/e's archiving guidelines</p>
+</header>
+
+<main>
+  <p class="intro">This website is made for TU/e data managers to easily compare a data and code package against the <a href="https://cockpit.research.tue.nl/helpcenter/research/portal/7/article/2813460512" target="_blank" rel="noopener">archiving guidelines</a> for RAPS (Research Archival Package Solution). Upload a paper or a folder below and you will receive a report with automated checks within minutes. Everything runs on <a href="https://www.surf.nl/en/services/compute/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, and relies on an open source language model to generate an adjusted README. This tool is GDPR compliant.</p>
+
+  <div class="columns single">
+
+    <section class="tool" id="tool-package">
+      <h2>Check a Data Package</h2>
+      <p class="lead">Choose the package folder, or paste a link to an online repository, and receive a report that checks it against TU/e's archiving guidelines.</p>
+      <div class="drop drop-folder" tabindex="0">
+        <span class="drop-text">Drop a folder or a .zip file here</span>
+        <span class="drop-buttons">
+          <label class="small-button">Choose a folder<input type="file" class="pick-folder" webkitdirectory multiple></label>
+          <label class="small-button">Choose a .zip<input type="file" class="pick-zip" accept=".zip,application/zip"></label>
+        </span>
+      </div>
+      <p class="note">Your browser packs the folder into a .zip before uploading it, at most 500 MB (1000 MB unpacked). Hidden files such as <code>.DS_Store</code> are sent too, because the check looks for them.</p>
+      <label class="repo-link"><span>Or paste a link to an online repository</span>
+        <input type="url" class="repo-url" placeholder="https://github.com/user/repo  or  https://osf.io/abcde" autocomplete="off">
+      </label>
+      <p class="note">For a link, the server fetches the public files itself (GitHub, OSF, Zenodo, Dataverse, Dryad, ...): files over 100 MB are skipped, and at most 500 MB is fetched.</p>
+      <fieldset class="people">
+        <legend>Did people take part, or was personal data used?</legend>
+        <label class="crossref"><input type="radio" name="people" value="" checked> Let the check decide <span class="note">(from the data, the README and the package's documents)</span></label>
+        <label class="crossref"><input type="radio" name="people" value="true"> Yes</label>
+        <label class="crossref"><input type="radio" name="people" value="false"> No <span class="note">(personal data found in the data still counts as yes)</span></label>
+      </fieldset>
+      <label class="crossref"><input type="checkbox" class="run-code" checked> Run the R and Python code <span class="note">(in a closed sandbox on the server, at most 5 minutes per script)</span></label>
+      <button type="button" class="go" disabled>Check the data package</button>
+      <div class="status" hidden></div>
+      <p class="note server-note"></p>
+    </section>
+
+  </div>
+
+  <section class="about">
+    <h2>What happens to your files</h2>
+    <p>The package goes to the metacheck server on SURF Research Cloud and nowhere else, with one exception: to decide whether people took part, up to 3 of the package's scientific documents (such as the manuscript) may be converted to text by TU/e's GROBID server. The uploaded package is deleted as soon as the check has read it, and the report is kept for one hour. A report can only be fetched with its random job number, which only your browser knows.</p>
+
+    <h2>About the check</h2>
+    <p>The checks follow TU/e's archiving guidelines in Research Cockpit and the RDLC document "Using Metacheck for data package review and paper analysis". Every decision behind them is described in the <a href="https://github.com/Lakens/tue_datamanager_check" target="_blank" rel="noopener">tue_datamanager_check repository</a>, where you can also run the check on your own computer.</p>
+  </section>
+</main>
+
+<footer>
+  <p><a href="https://github.com/Lakens/tue_datamanager_check" target="_blank" rel="noopener">tue_datamanager_check</a> is a module for <a href="https://www.scienceverse.org/metacheck/" target="_blank" rel="noopener">Metacheck</a>, open source software by <a href="https://github.com/scienceverse" target="_blank" rel="noopener">scienceverse</a>. <span id="version"></span></p>
+</footer>
+
+<script src="www/config.js"></script>
+<script src="www/jszip.min.js"></script>
+<script src="www/tdc.js"></script>
+</body>
+</html>

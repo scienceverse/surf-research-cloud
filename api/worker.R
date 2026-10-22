@@ -180,7 +180,14 @@ do_repocheck <- function(job_dir, job) {
     }
     rc$use_shiny_progress()
     rc$shiny_progress_modules(labels, from = 0.1, to = 0.9)
-    rc$render_brief_report(paper, modules, file.path(job_dir, "result.html"), args = args)
+    if (identical(job$report_type, "checklist")) {
+      # metacheck's checklist report (what to fix and to improve first), as the
+      # ResearchBox page asks for, instead of the app's brief report
+      metacheck::report(paper, modules = modules, output_file = file.path(job_dir, "result.html"),
+                        report_type = "checklist", args = args)
+    } else {
+      rc$render_brief_report(paper, modules, file.path(job_dir, "result.html"), args = args)
+    }
   }, error = function(e) stop(rc$explain_error(conditionMessage(e)), call. = FALSE))
   unlink(file.path(job_dir, "progress.txt"))
   .set_status(job_dir, status = "done", step = "done", finished = .now(),
@@ -219,6 +226,82 @@ do_repocheck <- function(job_dir, job) {
   metacheck::report_module_run(paper, modules, args)
 }
 
+# A PsyArXiv preprint (field `psyarxiv`, an id checked by api.R): its record
+# from PsyArXiv's API, and its current PDF saved as <job_dir>/input.pdf. The
+# addresses are built here from PSYARXIV_API (the id is the only input), and a
+# file comes only from PsyArXiv itself or, when PsyArXiv has only that link,
+# from the OSF. PsyArXiv's files send no CORS header, which is why a web page
+# cannot fetch the PDF and send it on itself.
+.fetch_psyarxiv <- function(id, job_dir) {
+  api <- Sys.getenv("PSYARXIV_API", "https://next.psyarxiv.org/api/v1")
+  site <- sub("/api(/.*)?$", "", api)
+  ua <- "metacheck SURF Research Cloud server (scienceverse/surf-research-cloud)"
+  resp <- httr2::request(paste0(api, "/preprints/", id)) |>
+    httr2::req_headers(`User-Agent` = ua) |>
+    httr2::req_timeout(60) |>
+    httr2::req_retry(max_tries = 3) |>
+    httr2::req_error(is_error = function(r) FALSE) |>
+    httr2::req_perform()
+  if (httr2::resp_status(resp) == 404) stop("PsyArXiv has no preprint with the id '", id, "'.", call. = FALSE)
+  if (httr2::resp_status(resp) >= 400) {
+    stop("PsyArXiv did not answer (HTTP ", httr2::resp_status(resp), "); try again later.", call. = FALSE)
+  }
+  rec <- httr2::resp_body_json(resp, simplifyVector = FALSE)
+  if (identical(rec$state, "withdrawn")) stop("This preprint was withdrawn from PsyArXiv; it has no file to check.", call. = FALSE)
+  v <- if (length(rec$versions)) rec$versions[[1]] else list()
+  src <- rec$fileUrl %||% v$fileUrl
+  src <- if (!is.null(src) && startsWith(src, "/")) paste0(site, src) else NULL
+  if (is.null(src) && is.character(v$osfFileUrl) && startsWith(v$osfFileUrl, "https://osf.io/")) src <- v$osfFileUrl
+  if (is.null(src)) stop("This preprint has no file to check on PsyArXiv.", call. = FALSE)
+  if (!identical(tolower(v$contentType %||% "application/pdf"), "application/pdf")) {
+    stop("This preprint's file is not a PDF (", v$contentType, "); metacheck reads PDFs.", call. = FALSE)
+  }
+  pdf <- file.path(job_dir, "input.pdf")
+  httr2::request(src) |>
+    httr2::req_headers(`User-Agent` = ua) |>
+    httr2::req_timeout(300) |>
+    httr2::req_retry(max_tries = 3) |>
+    httr2::req_perform(path = pdf)
+  if (file.size(pdf) > 50 * 1024^2) stop("The preprint's PDF is larger than 50 MB.", call. = FALSE)
+  if (!identical(readBin(pdf, "raw", 4), charToRaw("%PDF"))) stop("The file PsyArXiv sent is not a PDF.", call. = FALSE)
+  list(path = pdf, title = rec$title %||% "", version = rec$version %||% NA)
+}
+
+# metacheck's checklist report (report_type = "checklist") from module results
+# that already ran: as metacheck::report() renders it (rmarkdown, with the
+# pandoc Quarto ships), without running the modules a second time. Returns the
+# HTML, or "" when it could not be rendered.
+render_checklist_html <- function(module_output, paper) {
+  tryCatch({
+    prev <- metacheck::report_type()
+    metacheck::report_type("checklist")
+    on.exit(metacheck::report_type(prev), add = TRUE)
+    rmd <- tempfile(fileext = ".Rmd")
+    html <- sub("Rmd$", "html", rmd)
+    on.exit(unlink(c(rmd, html)), add = TRUE)
+    writeLines(metacheck::report_qmd(module_output, paper), rmd, useBytes = TRUE)
+    pandoc <- tryCatch(metacheck:::.report_pandoc_dir(), error = function(e) NULL)
+    if (is.null(pandoc)) {
+      # on Linux, Quarto keeps pandoc one folder deeper, in tools/<arch>/,
+      # where metacheck's .report_pandoc_dir() does not look
+      q <- tryCatch(quarto::quarto_path(), error = function(e) NULL)
+      hits <- if (length(q) && nzchar(q)) Sys.glob(file.path(dirname(q), "tools", "*", "pandoc")) else character(0)
+      if (length(hits)) pandoc <- dirname(hits[1])
+    }
+    if (!is.null(pandoc)) {
+      old <- Sys.getenv("RSTUDIO_PANDOC", unset = NA)
+      Sys.setenv(RSTUDIO_PANDOC = pandoc)
+      on.exit(if (is.na(old)) Sys.unsetenv("RSTUDIO_PANDOC") else Sys.setenv(RSTUDIO_PANDOC = old), add = TRUE)
+    }
+    rmarkdown::render(rmd, output_file = basename(html), output_dir = dirname(html),
+                      quiet = TRUE, envir = new.env(parent = globalenv()))
+    paste(readLines(html, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  }, error = function(e) {
+    message("checklist report not rendered: ", conditionMessage(e))
+    ""
+  })
+}
+
 do_job <- function(job_dir) {
   job <- jsonlite::read_json(file.path(job_dir, "job.json"), simplifyVector = TRUE)
   input <- file.path(job_dir, job$input_file)
@@ -226,6 +309,15 @@ do_job <- function(job_dir) {
   tryCatch({
     if (job$kind == "repocheck") return(do_repocheck(job_dir, job))
     .setup_llm()
+
+    # 0. a PsyArXiv preprint: fetch its PDF, then go on as for an uploaded PDF
+    if (identical(job$input_kind, "psyarxiv")) {
+      .set_status(job_dir, step = "fetching the preprint from PsyArXiv")
+      pp <- .fetch_psyarxiv(job$psyarxiv, job_dir)
+      unlink(input)
+      input <- pp$path
+      job$input_kind <- "pdf"
+    }
 
     # 1. bibr JSON: convert the PDF, or use the uploaded JSON
     if (job$input_kind == "pdf") {
@@ -288,7 +380,8 @@ do_job <- function(job_dir) {
     html <- ""
     if (want_report) {
       .set_status(job_dir, step = "rendering the report")
-      html <- render_report_html(full, paper)
+      html <- if (identical(job$report_type, "checklist")) render_checklist_html(full, paper)
+              else render_report_html(full, paper)
       if (job$kind == "report" && !nzchar(html)) stop("The report could not be rendered.")
     }
     if (job$kind == "report") {

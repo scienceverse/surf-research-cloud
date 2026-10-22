@@ -308,7 +308,11 @@ later::later(.scheduler, 1)
     if (nzchar(trimws(fields$url %||% ""))) {
       return(list(raw = NULL, kind = "url", name = "", fields = fields))
     }
-    stop("Send exactly one file in the form field 'file' (or, for a repository check, a link in the field 'url').",
+    # or a PsyArXiv preprint, whose PDF the worker fetches itself
+    if (nzchar(trimws(fields$psyarxiv %||% ""))) {
+      return(list(raw = NULL, kind = "psyarxiv", name = "", fields = fields))
+    }
+    stop("Send exactly one file in the form field 'file' (or, for a repository check, a link in the field 'url'; for a PsyArXiv preprint, its link or id in the field 'psyarxiv').",
          call. = FALSE)
   }
   raw <- f$value
@@ -377,6 +381,35 @@ later::later(.scheduler, 1)
 
 .parse_flag <- function(x) tolower(trimws(x %||% "false")) %in% c("true", "1", "yes")
 
+# The report's layout (field `report_type`): "checklist" (every check sorted
+# by its result: to fix, to improve, ..., with what was found and what to do)
+# or the default ("" = the brief report for a repository check, the full
+# report for a paper). An installed module always gives its own checklist.
+.parse_report_type <- function(x) {
+  x <- tolower(trimws(x %||% ""))
+  if (!x %in% c("", "checklist")) stop("report_type must be \"checklist\" (or left out).", call. = FALSE)
+  x
+}
+
+# A PsyArXiv preprint id from an id, a PsyArXiv, OSF or psyarxiv.com link, or
+# a PsyArXiv DOI (10.31234/osf.io/<id>, optionally with _v<n>). Only the id
+# goes on: the worker builds the PsyArXiv address itself, so the field cannot
+# make this server fetch from anywhere else.
+.psyarxiv_id <- function(x) {
+  x <- trimws(x %||% "")
+  if (nchar(x) > 300) stop("That PsyArXiv link is too long.", call. = FALSE)
+  x <- sub("^https?://(dx\\.)?doi\\.org/", "", x)
+  x <- sub("^(doi:)?10\\.31234/osf\\.io/", "", x, ignore.case = TRUE)
+  x <- sub("^https?://[^/]+/(preprints?/(psyarxiv/)?)?", "", x)
+  x <- sub("[/?#].*$", "", x)
+  x <- tolower(sub("_v\\d+$", "", x))
+  if (!grepl("^[a-z0-9]{5,12}$", x)) {
+    stop("That does not look like a PsyArXiv link, DOI or id (such as https://next.psyarxiv.org/preprint/28j7s).",
+         call. = FALSE)
+  }
+  x
+}
+
 # "true"/"false" as TRUE/FALSE; anything else (or nothing) as NA, "not known".
 .parse_answer <- function(x) {
   x <- tolower(trimws(x %||% ""))
@@ -429,9 +462,14 @@ later::later(.scheduler, 1)
   if (kind != "repocheck" && up$kind == "zip") {
     stop("A .zip file is checked with kind=repocheck (or POST /repocheck).", call. = FALSE)
   }
-  if (up$kind == "pdf" && !nzchar(Sys.getenv("BIBR_API_URL"))) {
+  if (up$kind == "psyarxiv" && !kind %in% c("report", "check")) {
+    stop("A PsyArXiv preprint is checked as a paper (kind=report or kind=check).", call. = FALSE)
+  }
+  psyarxiv <- if (up$kind == "psyarxiv") .psyarxiv_id(up$fields$psyarxiv) else NULL
+  if (up$kind %in% c("pdf", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL"))) {
     stop("This server has no bibr: send bibr JSON instead of a PDF.", call. = FALSE)
   }
+  report_type <- .parse_report_type(up$fields$report_type)
   modules <- if (kind == "convert") character(0)
              else if (kind == "repocheck") .parse_installed_module(up$fields$modules)
              else .parse_modules(up$fields$modules)
@@ -444,22 +482,27 @@ later::later(.scheduler, 1)
   id <- uuid::UUIDgenerate()
   dir.create(.job_dir(id), mode = "0700")
   input <- paste0("input.", up$kind)
-  if (is.null(url)) writeBin(up$raw, file.path(.job_dir(id), input))
-  else writeLines(url, file.path(.job_dir(id), input))
+  if (!is.null(url)) writeLines(url, file.path(.job_dir(id), input))
+  else if (!is.null(psyarxiv)) writeLines(psyarxiv, file.path(.job_dir(id), input))
+  else writeBin(up$raw, file.path(.job_dir(id), input))
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
-                            name = if (is.null(url)) up$name else url,
+                            name = if (!is.null(url)) url else if (!is.null(psyarxiv)) psyarxiv else up$name,
                             url = url,
+                            psyarxiv = psyarxiv,
+                            report_type = report_type,
                             crossref = .parse_flag(up$fields$crossref),
                             # run the code in the sandbox: for a repository check by
                             # default, for a paper (its repository, through the links in
                             # the paper) only when asked; only where the sandbox is on.
                             # An installed module (such as tue_datamanager_check) runs
                             # the code only when asked, and runs reproducibility_check itself
+                            # (A paper always has modules, so the `!length(modules)`
+                            # that applies to a plain repository check must not
+                            # apply to it: it made run_code always false for papers.)
                             run_code = SANDBOX_ON && kind != "convert" &&
                               (if (kind == "repocheck" && length(modules)) .parse_flag(up$fields$run_code)
-                               else !length(modules) &&
-                                 (if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
-                                  else .parse_flag(up$fields$run_code))),
+                               else if (kind == "repocheck") is.null(up$fields$run_code) || .parse_flag(up$fields$run_code)
+                               else .parse_flag(up$fields$run_code)),
                             # for an installed module: whether people took part, if
                             # the sender knows (true/false); null lets it decide
                             human_participants = .parse_answer(up$fields$human_participants),
@@ -620,10 +663,12 @@ function() {
 #* @parser octet
 #* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
 #* @param url for repocheck, instead of a file: a link to an online repository (GitHub, OSF, Zenodo, ...)
+#* @param psyarxiv for report or check, instead of a file: a PsyArXiv preprint's link, DOI or id (the server fetches its PDF from PsyArXiv)
 #* @param kind "report" (default), "check", "convert" or "repocheck"
 #* @param modules Comma-separated module names (optional; see GET /modules); for repocheck, one installed module to run on the .zip or link instead (see `installed` in GET /modules)
 #* @param human_participants repocheck with an installed module: "true" or "false" when you know whether people took part or personal data was used (optional)
 #* @param report "true" to include the HTML report in a check result (optional)
+#* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...) instead of the full (paper) or brief (repository) report
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @serializer unboxedJSON
@@ -659,6 +704,8 @@ function(id, res) {
 #* @parser multi
 #* @parser octet
 #* @param file:file The PDF or bibr JSON
+#* @param psyarxiv for report or check, instead of a file: a PsyArXiv preprint's link, DOI or id (the server fetches its PDF from PsyArXiv)
+#* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...); default the full report
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 #* @param run_code "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
@@ -669,6 +716,8 @@ function(req, res) .one_call(req, res, "report")
 #* @parser multi
 #* @parser octet
 #* @param file:file The PDF or bibr JSON
+#* @param psyarxiv for report or check, instead of a file: a PsyArXiv preprint's link, DOI or id (the server fetches its PDF from PsyArXiv)
+#* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...); default the full report
 #* @param modules Comma-separated module names (optional; see GET /modules)
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 #* @param run_code "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
@@ -689,6 +738,7 @@ function(req, res) .one_call(req, res, "convert")
 #* @parser octet
 #* @param file:file The .zip of the folder (or, instead, `url`)
 #* @param url A link to an online repository (GitHub, OSF, Zenodo, Dataverse, ...), instead of a .zip; the server fetches its public files
+#* @param report_type "checklist" for the checklist report instead of the brief report (an installed module always gives its own checklist)
 #* @param run_code "false" to skip running the R and Python code in the sandbox (default true where the server offers it; see GET /health). With an installed module: "true" to have it run the code in the sandbox (default false)
 #* @param modules An installed module to run on the .zip or link instead, such as tue_datamanager_check (optional; see `installed` in GET /modules); returns that module's report
 #* @param human_participants For an installed module: "true" or "false" when you know whether people took part or personal data was used (optional; the module decides otherwise)

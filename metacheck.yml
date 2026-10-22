@@ -703,16 +703,24 @@
           or metacheck_variants.changed or metacheck_limit.changed)
       register: metacheck_nginx
 
-    - name: Show the website at the workspace root
+    - name: Show the website at the workspace root, and its check pages at short addresses
       ansible.builtin.copy:
         dest: /etc/nginx/app-location-conf.d/00-root.conf
         mode: "0644"
         content: |
           # Managed by the scienceverse/surf-research-cloud components.
           # The root shows the metacheck website (location /site/, which also
-          # decides whether a login is needed).
+          # decides whether a login is needed), and /datamanager/,
+          # /researchbox/ and /psyarxiv/ show its check pages (site/<page>/),
+          # through the same location.
           location = / {
               rewrite ^ /site/ last;
+          }
+          location ~ ^/(datamanager|researchbox|psyarxiv)$ {
+              return 301 /$1/;
+          }
+          location ~ ^/(datamanager|researchbox|psyarxiv)/(.*)$ {
+              rewrite ^/(datamanager|researchbox|psyarxiv)/(.*)$ /site/$1/$2 last;
           }
       when: nginx_locations.stat.exists
       register: root_nginx

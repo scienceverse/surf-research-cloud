@@ -159,6 +159,29 @@ files and says what to do (move the folder to a short path, keep it on the devic
 or pack it with 7-Zip). Tested in Edge on cached repositories with long paths
 (20 October 2026).
 
+### Check pages
+
+Three more pages, each at a short address (rewritten by `00-root.conf` to
+`site/<page>/`, so they follow the same login/public setting as the website), and
+linked from it under "More checks". They were apps on the TU/e Shiny server before;
+here they use this workspace's web interface.
+
+| Address | Page | What it sends | Report |
+|---|---|---|---|
+| `/psyarxiv/` | `site/psyarxiv/` | `kind=report`, `psyarxiv=<id>`, `report_type=checklist`, every module in `GET /modules` `allowed`; optional `crossref`, `run_code` | metacheck's checklist report on the paper, after the page's own checks of the PsyArXiv record (open data reachable, preregistration, license, conflict of interest, ORCID iDs), read in the browser from PsyArXiv's API |
+| `/researchbox/` | `site/researchbox/` | `kind=repocheck`, `url=https://researchbox.org/<n>`, `report_type=checklist`, `run_code` | metacheck's checklist report on the box's data and code |
+| `/datamanager/` | `site/datamanager/` | as on the TU/e server: `kind=repocheck`, `modules=tue_datamanager_check` | the TU/e module's own checklist report |
+
+`site/datamanager/` is a copy of `web/` in
+[Lakens/tue_datamanager_check](https://github.com/Lakens/tue_datamanager_check)
+(main, 22 October 2026) with `www/config.js` pointing at this server
+(`location.origin + "/api"`); copy it again when the page changes there. The PsyArXiv
+and ResearchBox pages share `site/check-link.js` (send, follow, offer the report;
+a 502/503 while the server restarts for an update is tried again) and
+`site/check-pages.css`. A page address with `?api=<address>` uses another server,
+for testing. Tested in Edge (22 October 2026): link parsing, the PsyArXiv record and
+its checks, an unknown id, and the layout.
+
 ## Running a repository's code
 
 The repository check (`/api/repocheck`, column 2 of the website) also runs the
@@ -312,6 +335,27 @@ folder. It follows the same switch as the app: open to anyone while
 | `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository; optional `modules` = an installed module, `human_participants` = `true`/`false` | the HTML report of `repo_check`, `code_check` and `data_check`, or of the installed module |
 | `GET /api/modules` | | the modules that may be requested, the default set, and (`installed`) the modules installed on this server |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
+
+Two fields work with several of these (22 October 2026):
+
+- `report_type=checklist`: metacheck's checklist report (every check sorted by its
+  result: to fix, to improve, to decide by hand, fine, ...; what was found and what
+  to do on separate lines) instead of the full report of a paper (`report`, and
+  `check` with `report=true`) or the brief report of a repository check
+  (`repocheck`). For a paper it is drawn from the module results that already ran
+  (`render_checklist_html()` in `worker.R`). An installed module always gives its
+  own checklist.
+- `psyarxiv=<link, DOI or id>` (`report` and `check`, instead of a file): the worker
+  reads the preprint's record from PsyArXiv's API and fetches its current PDF from
+  PsyArXiv (or, when PsyArXiv has only that link, from the OSF), then checks it like
+  an uploaded PDF. Only the id is passed on (checked by `.psyarxiv_id()` in `api.R`),
+  so the field cannot make the server fetch anything else. PsyArXiv's files send no
+  CORS header, which is why a web page cannot fetch the PDF itself. The PsyArXiv API
+  address is `PSYARXIV_API` (default `https://next.psyarxiv.org/api/v1`).
+
+`run_code=true` with `report` or `check` now runs the paper's code as documented;
+before, a paper job always had `run_code` false (`!length(modules)` in `.submit()`
+applied to papers too, and a paper always has modules).
 | `/api/__docs__/` | | interactive documentation in the browser |
 
 PDFs are converted by the bibr the component is connected to (bibr itself stays
