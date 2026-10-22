@@ -233,7 +233,11 @@ uploaded R and Python code with metacheck's reproducibility check
 (`reproducibility_check(execute = TRUE, sandbox = "docker")`), unless the request
 says `run_code=false` or the box on the website is unticked. The report then shows,
 per script, whether it ran, failed or ran out of time, with its output. Each
-script may run 5 minutes, a job 60 minutes. Packages are never installed at run
+script may run 5 minutes, a job 60 minutes. All scripts together must be done 10
+minutes before the job's limit (`total_timeout` as a clock time, metacheck 0.4.1.5
+and later; `CODE_REPORT_MINUTES` in `api/worker.R`): then a running script is
+stopped and the rest are not started, so the report still comes back with what
+ran. Packages are never installed at run
 time (`install_missing = FALSE`): the code runs with what the images contain.
 
 Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
@@ -446,6 +450,9 @@ uses Crossref.
 Every paper or folder becomes a job in one queue, whichever request sent it. At most two jobs
 run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
 keeps answering while they run; at most 20 wait, and further uploads get HTTP 503.
+While the interface is not running (during an automatic update, or a restart),
+nginx answers HTTP 503 with a JSON `error` and `Retry-After: 120` instead of its
+own "502 Bad Gateway" page.
 `/jobs` answers at once and suits web pages and long papers; `/report`, `/check` and
 `/convert` keep the connection open until their job is finished, so they are one line
 of code. A job is stopped after 30 minutes. A new 16-page paper took about 60 s from
@@ -765,6 +772,12 @@ module has a newer commit, the script
 4. starts the web interface again, restarts Shiny Server when metacheck changed
    (its R processes keep the old version loaded), and checks that the web
    interface answers.
+
+The script and the playbook never install at the same time: the script holds
+`/run/metacheck-auto-update.lock` while it runs and skips a turn when the lock is
+taken, and the playbook takes that lock (after waiting up to 30 minutes for a
+running update) through a helper unit, `metacheck-playbook-hold`, until it ends.
+A playbook run that stops early leaves the helper running for at most an hour.
 
 Every version on `metacheck_ref` goes live this way, also an unfinished one;
 to install only releases, set `metacheck_ref` to a tag. The script changes

@@ -367,6 +367,27 @@
     # ------------------------------------------------------------------
       register: shiny_pkg
 
+    # The automatic update (files/metacheck/metacheck-auto-update) also
+    # installs metacheck and the modules, and stops the web interface while
+    # it does; both at once broke an install on 22 October 2026. It holds
+    # /run/metacheck-auto-update.lock while it runs and skips a turn when the
+    # lock is taken. So a helper takes that lock (after a running update has
+    # finished) and keeps it until the end of this run; when a run stops
+    # early, the helper lets go after an hour.
+    - name: Hold off automatic updates while this playbook runs
+      ansible.builtin.shell: |
+        systemctl stop metacheck-playbook-hold 2>/dev/null || true
+        rm -f /run/metacheck-playbook-hold.ok
+        systemd-run --unit=metacheck-playbook-hold --collect \
+          flock -w 1800 /run/metacheck-auto-update.lock \
+          sh -c "touch /run/metacheck-playbook-hold.ok; exec sleep 3600"
+      changed_when: false
+
+    - name: Wait until no automatic update is running (at most 30 minutes)
+      ansible.builtin.wait_for:
+        path: /run/metacheck-playbook-hold.ok
+        timeout: 1800
+
     - name: Copy metacheck install script
       ansible.builtin.copy:
         src: files/metacheck/install-metacheck.R
@@ -826,6 +847,12 @@
 
     - name: Free disk space
       ansible.builtin.include_tasks: tasks/cleanup.yml
+
+    - name: Let automatic updates run again
+      ansible.builtin.shell: |
+        systemctl stop metacheck-playbook-hold 2>/dev/null || true
+        rm -f /run/metacheck-playbook-hold.ok
+      changed_when: false
 
     - name: Update status file
       ansible.builtin.lineinfile:
