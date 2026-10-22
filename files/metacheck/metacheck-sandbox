@@ -18,6 +18,11 @@
 #       sandbox folder as the only writable mount, one of the allowed images,
 #       running Rscript or python on a file in /sandbox. Every other option is
 #       refused, and the command is rebuilt here from the checked parts.
+#       The packages folders (/rlib, /pylib) are the guard's own for the job.
+#   docker run ... install.R/.sh     metacheck's request to install packages:
+#       the same container, but with the network, running the guard's own
+#       install script for the CRAN/PyPI packages named in the request,
+#       writing into the job's packages folder (see check_install()).
 #   docker stop --time N repro_...   only a container of the same job
 #
 # and, for the web interface and a timer:
@@ -35,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import syslog
+import tempfile
 import time
 
 DOCKER = "/usr/bin/docker"
@@ -58,6 +64,24 @@ IMAGES = {
 }
 COMMANDS = {"Rscript", "python"}
 MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "ro", "/pylib": "ro"}
+
+# Installing a job's packages (see check_install()). The packages go into the
+# guard's own folder for the job, on a disk where compiled code may be loaded
+# (the sandbox file system is noexec), instead of the folder metacheck makes
+# for them; the scripts then see that folder read-only.
+LIB_ROOT = "/var/lib/metacheck-sandbox-lib"
+LIB_TARGETS = {"/rlib": "r", "/pylib": "py"}
+INSTALL_ROOT = "/run/metacheck-sandbox-install"   # the guard's install scripts
+INSTALL_MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "rw", "/pylib": "rw"}
+INSTALL_TMPFS = "/tmp:rw,nosuid,nodev,size=4g"     # compilers and pip unpack here
+# the install requests metacheck makes: (command, script) -> language
+INSTALL_REQUESTS = {("Rscript", "/sandbox/install.R"): "r", ("sh", "/sandbox/install.sh"): "py"}
+CRAN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9.]*[A-Za-z0-9]$")
+PY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$")
+PY_VERSION = r"\s*(==|>=|<=|~=|!=|>|<)\s*[A-Za-z0-9.*+!_-]+"
+PY_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,100}(\[[A-Za-z0-9,._-]+\])?"
+                       r"(%s(\s*,%s)*)?$" % (PY_VERSION, PY_VERSION))
+P3M = "https://packagemanager.posit.co/cran/__linux__/"   # ready-built Linux packages of CRAN
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NAME_RE = re.compile(r"^repro_[A-Za-z0-9_.-]{1,100}$")
@@ -86,11 +110,65 @@ def inside(path, root):
     return real == root or real.startswith(root + os.sep)
 
 
+def remapped_ids():
+    """The host user and group of the containers' user 1000:1000 under
+    Docker's user remapping ("dockremap" in /etc/subuid and /etc/subgid), or
+    None when there is no such entry."""
+    ids = []
+    for f in ("/etc/subuid", "/etc/subgid"):
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    p = line.strip().split(":")
+                    if len(p) == 3 and p[0] == "dockremap" and p[1].isdigit():
+                        ids.append(int(p[1]) + 1000)
+                        break
+        except OSError:
+            pass
+    return tuple(ids) if len(ids) == 2 else None
+
+
+def lib_dir(job, kind):
+    """The guard's package folder for a job and language ("r" or "py"),
+    made when it is not there yet: writable only by the containers' user."""
+    d = os.path.join(LIB_ROOT, job, kind)
+    if not os.path.isdir(d):
+        top = os.path.join(LIB_ROOT, job)
+        os.makedirs(top, exist_ok=True)
+        os.chmod(top, 0o711)
+        os.makedirs(d, exist_ok=True)
+        ids = remapped_ids()
+        if ids:
+            os.chown(d, ids[0], ids[1])
+            os.chmod(d, 0o700)
+        else:
+            os.chmod(d, 0o777)
+    return d
+
+
+def read_job_file(job, path, limit=1000000):
+    """The text of a file in the job's sandbox folder (not a symbolic link,
+    at most `limit` bytes)."""
+    if not inside(path, job_dir(job)):
+        refuse(job, "file %r is outside the job's sandbox folder" % path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        refuse(job, "cannot read %r: %s" % (path, e))
+    with os.fdopen(fd, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        refuse(job, "file %r is too large" % path)
+    return data.decode("utf-8", "replace")
+
+
 # ---- docker run -----------------------------------------------------------------
 
-def check_run(job, args):
-    """Checks `docker run` arguments as metacheck builds them; returns the
-    command to run, rebuilt from the checked parts."""
+def parse_options(job, args, targets):
+    """Reads the options of a `docker run` as metacheck builds them, refusing
+    any other option or a mount that `targets` (target -> mode) does not
+    allow; returns the options seen, the mounts (target -> (source, mode)),
+    the environment variables and the arguments after the options."""
     i = 0
     seen = {}
     mounts = {}
@@ -181,7 +259,7 @@ def check_run(job, args):
                 src, target, mode = parts
             else:
                 refuse(job, "mount %r" % v)
-            if target not in MOUNT_TARGETS or MOUNT_TARGETS[target] != mode or target in mounts:
+            if target not in targets or targets[target] != mode or target in mounts:
                 refuse(job, "mount %r" % v)
             if not os.path.isabs(src) or not os.path.isdir(src):
                 refuse(job, "mount source %r is not a folder" % src)
@@ -191,8 +269,13 @@ def check_run(job, args):
         else:
             refuse(job, "option %r" % a)
         i += 1
+    return seen, mounts, env, args[i:]
 
-    rest = args[i:]
+
+def check_run(job, args):
+    """Checks `docker run` arguments as metacheck builds them; returns the
+    command to run, rebuilt from the checked parts."""
+    seen, mounts, env, rest = parse_options(job, args, MOUNT_TARGETS)
     required = {"--rm": True, "--read-only": True, "--network": "none", "--tmpfs": "/tmp",
                 "--user": "1000:1000", "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
                 "--name": None, "--pids-limit": None, "-w": "/sandbox"}
@@ -227,11 +310,226 @@ def check_run(job, args):
            "--ulimit", "core=0", "--ulimit", "fsize=%d" % MAX_FILE_BYTES,
            "-w", "/sandbox"]
     for target, (src, mode) in sorted(mounts.items()):
+        # the packages installed for this job, from the guard's own folder
+        # (see lib_dir()), instead of the folder metacheck made for them
+        if target in LIB_TARGETS:
+            src = lib_dir(job, LIB_TARGETS[target])
         cmd += ["-v", "%s:%s:%s" % (src, target, mode)]
     for e in env:
         cmd += ["-e", e]
     cmd += [IMAGES[image], command, script]
     return cmd
+
+
+# ---- installing packages --------------------------------------------------------
+#
+# metacheck installs a paper's missing packages in a container of its own
+# before the scripts run (reproducibility_check(install_missing = TRUE)). That
+# container needs the network, so it never runs a file the job wrote: the
+# guard takes only the package names from metacheck's install script, keeps
+# the CRAN (R) and PyPI (Python) ones whose names it accepts, and runs its own
+# install script, from a folder only root can write. R packages come ready
+# built from Posit's package manager for the image's Ubuntu release; Python
+# packages only as ready-built wheels (--only-binary), so no package's own
+# build code runs. A package the image already has is not installed again.
+# The results go where metacheck reads them, in the same form.
+
+R_CRAN_ONLY = "not installed: this server installs R packages from CRAN only"
+PY_PYPI_ONLY = "not installed: this server installs Python packages from PyPI only"
+
+
+def is_install(args):
+    """True for metacheck's install request: no network option, and an
+    install script as the command."""
+    return "--network" not in args and tuple(args[-2:]) in INSTALL_REQUESTS
+
+
+def r_strings(job, text, name):
+    """The strings of `.repro_docker_<name> <- c("a", "b")` in metacheck's install.R."""
+    m = re.search(r"^\.repro_docker_%s <- (.*)$" % name, text, re.M)
+    if not m:
+        refuse(job, "install.R without .repro_docker_%s" % name)
+    return re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+
+
+def r_install_request(job, text):
+    """[(package, source, install from CRAN?)] from metacheck's install.R;
+    names the guard does not accept are left out (metacheck then counts them
+    as not installed)."""
+    pkgs = r_strings(job, text, "pkgs")
+    srcs = r_strings(job, text, "srcs")
+    if not pkgs or len(pkgs) != len(srcs):
+        refuse(job, "install.R with %d packages and %d sources" % (len(pkgs), len(srcs)))
+    out = []
+    for pkg, src in zip(pkgs, srcs):
+        if CRAN_NAME_RE.match(pkg):
+            src = src if re.match(r"^[a-z]{1,20}$", src) else "unknown"
+            out.append((pkg, src, src == "cran"))
+    return out
+
+
+def py_install_request(job, text):
+    """(results file, [(package, source, requirement or None)]) from
+    metacheck's install.sh; requirements the guard does not accept (links,
+    git+, local paths) get None, so they are not installed."""
+    m = re.search(r'^OUT="(/sandbox/[A-Za-z0-9._-]+)"$', text, re.M)
+    if not m:
+        refuse(job, "install.sh without its results file")
+    req_re = re.compile(r"^if pip install --quiet --target /pylib '([^']*)' 2> /tmp/err_\d+\.txt; then$")
+    ok_re = re.compile(r'^  printf \'\{"package":"([^"]*)","source":"([^"]*)","installed":true')
+    out = []
+    req = None
+    for line in text.splitlines():
+        r = req_re.match(line)
+        if r:
+            req = r.group(1)
+            continue
+        k = ok_re.match(line)
+        if k and req is not None:
+            pkg, src = k.group(1), k.group(2)
+            if PY_NAME_RE.match(pkg):
+                src = src if re.match(r"^[a-z]{1,20}$", src) else "unknown"
+                good = src == "pypi" and PY_REQ_RE.match(req)
+                out.append((pkg, src, req if good else None))
+            req = None
+    if not out:
+        refuse(job, "install.sh without packages")
+    return m.group(1), out
+
+
+def r_install_script(request):
+    """The guard's install script for R packages."""
+    pkgs = ", ".join('"%s"' % p for p, _, _ in request)
+    srcs = ", ".join('"%s"' % s for _, s, _ in request)
+    cran = ", ".join("TRUE" if c else "FALSE" for _, _, c in request)
+    return "\n".join([
+        'lib <- "/rlib"',
+        '.libPaths(c(lib, .libPaths()))',
+        'os <- tryCatch(readLines("/etc/os-release"), error = function(e) character(0))',
+        'codename <- sub("^VERSION_CODENAME=", "", grep("^VERSION_CODENAME=", os, value = TRUE))',
+        'if (length(codename) == 1 && grepl("^[a-z]+$", codename)) {',
+        '  options(repos = c(CRAN = paste0("%s", codename, "/latest")),' % P3M,
+        '          HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(),',
+        '            paste(getRversion(), R.version[["platform"]], R.version[["arch"]], R.version[["os"]])))',
+        '} else {',
+        '  options(repos = c(CRAN = "https://cloud.r-project.org"))',
+        '}',
+        'pkgs <- c(%s)' % pkgs,
+        'srcs <- c(%s)' % srcs,
+        'cran <- c(%s)' % cran,
+        'out <- list()',
+        'for (i in seq_along(pkgs)) {',
+        '  pkg <- pkgs[i]',
+        '  res <- if (!cran[i]) {',
+        '    list(ok = FALSE, msg = "%s")' % R_CRAN_ONLY,
+        '  } else if (nzchar(system.file(package = pkg))) {',
+        '    list(ok = TRUE, msg = "")',
+        '  } else tryCatch({',
+        '    warns <- character(0)',
+        '    withCallingHandlers(install.packages(pkg, lib = lib, quiet = TRUE),',
+        '      warning = function(w) warns <<- c(warns, conditionMessage(w)))',
+        '    if (!requireNamespace(pkg, quietly = TRUE)) {',
+        '      na <- unique(grep("is not available", warns, value = TRUE, fixed = TRUE))',
+        '      stop(if (length(na) > 0) paste(na, collapse = "; ") else "installed but package is not loadable")',
+        '    }',
+        '    list(ok = TRUE, msg = "")',
+        '  }, error = function(e) list(ok = FALSE, msg = conditionMessage(e)))',
+        '  out[[i]] <- data.frame(package = pkg, source = srcs[i], installed = res$ok, message = res$msg)',
+        '  saveRDS(do.call(rbind, out), "/sandbox/.install_results.rds")',
+        '}',
+        ''])
+
+
+def py_install_script(out_file, request):
+    """The guard's install script for Python packages."""
+    return "\n".join([
+        "import json, subprocess, sys",
+        "from importlib import metadata",
+        "OUT = %r" % out_file,
+        "REQUESTS = %r" % (request,),
+        "open(OUT, 'w').close()",
+        "for pkg, src, req in REQUESTS:",
+        "    if req is None:",
+        "        ok, msg = False, %r" % PY_PYPI_ONLY,
+        "    else:",
+        "        try:",
+        "            metadata.version(pkg)",
+        "            ok, msg = True, ''",
+        "        except metadata.PackageNotFoundError:",
+        "            p = subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', '--no-input',",
+        "                                '--disable-pip-version-check', '--no-cache-dir',",
+        "                                '--only-binary', ':all:', '--target', '/pylib', req],",
+        "                               capture_output=True, text=True)",
+        "            ok = p.returncode == 0",
+        "            msg = '' if ok else ' '.join(p.stderr.split())[-1000:]",
+        "    with open(OUT, 'a') as fh:",
+        "        fh.write(json.dumps({'package': pkg, 'source': src, 'installed': ok, 'message': msg}) + '\\n')",
+        ""])
+
+
+def check_install(job, args):
+    """Checks metacheck's install request; returns the command that runs the
+    guard's own install script, and that script's folder (to delete after)."""
+    seen, mounts, env, rest = parse_options(job, args, INSTALL_MOUNT_TARGETS)
+    if env:
+        refuse(job, "environment variables for an install")
+    required = {"--rm": True, "--user": "1000:1000", "--cap-drop": "ALL",
+                "--security-opt": "no-new-privileges", "--name": None, "--pids-limit": None}
+    for k, want in required.items():
+        if k not in seen or (want is not None and seen[k] != want):
+            refuse(job, "required option %s missing" % k)
+    if len(rest) != 3:
+        refuse(job, "expected an image, a command and one file, got %r" % rest)
+    image, command, script = rest
+    if image not in IMAGES:
+        refuse(job, "image %r" % image)
+    kind = INSTALL_REQUESTS.get((command, script))
+    target = "/rlib" if kind == "r" else "/pylib"
+    if kind is None or set(mounts) != {"/sandbox", target}:
+        refuse(job, "install request %r with mounts %r" % (rest, sorted(mounts)))
+
+    text = read_job_file(job, os.path.join(mounts["/sandbox"][0], os.path.basename(script)))
+    if kind == "r":
+        request = r_install_request(job, text)
+        if not request:
+            refuse(job, "install.R without a package the guard accepts")
+        name, source = "install.R", r_install_script(request)
+        run = ["Rscript", "/install/install.R"]
+    else:
+        out_file, request = py_install_request(job, text)
+        name, source = "install.py", py_install_script(out_file, request)
+        run = ["python", "/install/install.py"]
+
+    os.makedirs(INSTALL_ROOT, exist_ok=True)
+    os.chmod(INSTALL_ROOT, 0o711)
+    folder = tempfile.mkdtemp(prefix=job + "-", dir=INSTALL_ROOT)
+    os.chmod(folder, 0o755)
+    path = os.path.join(folder, name)
+    with open(path, "w") as fh:
+        fh.write(source)
+    os.chmod(path, 0o644)
+
+    memory = seen.get("--memory", MAX_MEMORY_MB)
+    cmd = [DOCKER, "run", "--rm", "--pull", "never",
+           "--name", seen["--name"],
+           "--label", "metacheck-sandbox=1", "--label", "metacheck-job=%s" % job,
+           "--hostname", "sandbox",
+           "--network", "bridge",
+           "--read-only", "--tmpfs", INSTALL_TMPFS,
+           "--user", "1000:1000",
+           "--cap-drop", "ALL",
+           "--security-opt", "no-new-privileges",
+           "--pids-limit", str(min(seen["--pids-limit"], MAX_PIDS)),
+           "--cpus", "%g" % seen.get("--cpus", MAX_CPUS),
+           "--memory", "%dm" % memory, "--memory-swap", "%dm" % memory,
+           "--ulimit", "core=0", "--ulimit", "fsize=%d" % MAX_FILE_BYTES,
+           "-e", "HOME=/tmp",
+           "-w", "/sandbox",
+           "-v", "%s:/sandbox:rw" % mounts["/sandbox"][0],
+           "-v", "%s:%s:rw" % (lib_dir(job, kind), target),
+           "-v", "%s:/install:ro" % folder,
+           IMAGES[image]] + run
+    return cmd, folder
 
 
 # ---- cleanup and reap -----------------------------------------------------------
@@ -247,11 +545,11 @@ def stop_all(ids):
         subprocess.run([DOCKER, "stop", "--time", "5"] + ids, capture_output=True, timeout=120)
 
 
-def remove_dir(job):
-    d = job_dir(job)
+def remove_dir(job, root=SANDBOX_ROOT):
+    d = os.path.join(root, job)
     if os.path.islink(d) or not os.path.isdir(d):
         return
-    if os.path.dirname(os.path.realpath(d)) != os.path.realpath(SANDBOX_ROOT):
+    if os.path.dirname(os.path.realpath(d)) != os.path.realpath(root):
         return
     shutil.rmtree(d, ignore_errors=True)
 
@@ -259,6 +557,7 @@ def remove_dir(job):
 def cleanup(job):
     stop_all(containers("metacheck-job=%s" % job))
     remove_dir(job)
+    remove_dir(job, LIB_ROOT)
     log("cleanup job=%s" % job)
 
 
@@ -285,6 +584,17 @@ def reap():
             if now - os.path.getmtime(job_dir(name)) > MAX_SANDBOX_HOURS * 3600:
                 remove_dir(name)
                 removed += 1
+    # the package folders and install scripts of finished jobs
+    for root in (LIB_ROOT, INSTALL_ROOT):
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            if (JOB_RE.match(name[:36]) and name[:36] not in running_jobs
+                    and now - os.path.getmtime(path) > MAX_SANDBOX_HOURS * 3600):
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
     if stopped or removed:
         log("reap: stopped %d containers, removed %d sandbox folders" % (len(stopped), removed))
 
@@ -317,6 +627,13 @@ def main(argv):
                 refuse(job, "stop of a container of another job")
             log("stop job=%s %s" % (job, args[3]))
             os.execv(DOCKER, [DOCKER, "stop", "--time", args[2], args[3]])
+        if args and args[0] == "run" and is_install(args[1:]):
+            cmd, folder = check_install(job, args[1:])
+            log("install job=%s: %s" % (job, " ".join(cmd[1:])))
+            try:
+                return subprocess.run(cmd).returncode
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
         if args and args[0] == "run":
             cmd = check_run(job, args[1:])
             log("run job=%s: %s" % (job, " ".join(cmd[1:])))

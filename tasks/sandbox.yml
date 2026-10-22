@@ -8,7 +8,8 @@
 #      program lets through only metacheck's locked-down `docker run` (no
 #      network, read-only system, no capabilities, limited processes,
 #      processors, memory and file sizes, only the job's own folder writable,
-#      only the allowed images, Rscript or python only) and refuses the rest.
+#      only the allowed images, Rscript or python only), plus its install
+#      request (see below), and refuses the rest.
 #   2. Docker runs with user remapping (userns-remap): the container's users,
 #      root included, are unused numbers on the host, never a host account.
 #      No new privileges, no communication between containers, no image
@@ -18,8 +19,10 @@
 #      noexec, so a script that fills it cannot fill anything else.
 #   4. A timer stops any sandbox container running longer than 45 minutes and
 #      deletes leftover sandbox folders.
-# Packages are never installed at run time (install_missing = FALSE): code runs
-# with the packages in the images, so the network stays closed throughout.
+# Packages the images lack are installed before the code runs
+# (install_missing = TRUE), in a container of their own that has the network:
+# it runs only the guard's install script, for CRAN and PyPI packages, ready
+# built. The containers that run the code still have no network.
 #
 # Expects: large_disk (tasks/large_disk.yml), metacheck_component_dir,
 # metacheck_sandbox_size, metacheck_sandbox_images.
@@ -131,6 +134,32 @@
     owner: shiny
     group: shiny
     mode: "0700"
+
+# ---- the jobs' packages folders -------------------------------------------------
+
+# The packages installed for a job (see the guard's check_install()) go into
+# the guard's own folder for that job, not onto the sandbox file system: that
+# one is noexec, so compiled code installed there could not be loaded. Only
+# root (the guard) makes folders here; the containers' user writes into its
+# job's folder while installing and reads it while the scripts run.
+- name: Choose where the jobs' packages folders are kept
+  ansible.builtin.set_fact:
+    sandbox_lib_dir: "{{ (large_disk ~ '/metacheck-sandbox-lib') if large_disk is match('/data/') else '/var/lib/metacheck-sandbox-lib' }}"
+
+- name: Create the jobs' packages folder
+  ansible.builtin.file:
+    path: "{{ sandbox_lib_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+- name: Link it where the guard looks for it
+  ansible.builtin.file:
+    src: "{{ sandbox_lib_dir }}"
+    dest: /var/lib/metacheck-sandbox-lib
+    state: link
+  when: sandbox_lib_dir != '/var/lib/metacheck-sandbox-lib'
 
 # ---- the guard ----------------------------------------------------------------
 

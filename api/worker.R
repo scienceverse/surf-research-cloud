@@ -139,10 +139,10 @@ do_repocheck <- function(job_dir, job) {
       }
       if (isTRUE(job$run_code)) {
         # the module runs the code with metacheck's reproducibility check, as
-        # for a repository check: in the Docker sandbox, never installing
-        # packages, at most 5 minutes per script (see below)
+        # for a repository check: in the Docker sandbox, installing missing
+        # CRAN and PyPI packages first, at most 5 minutes per script (see below)
         margs$run_code <- TRUE
-        margs$run_args <- list(sandbox = "docker", install_missing = FALSE,
+        margs$run_args <- list(sandbox = "docker", install_missing = TRUE,
                                docker_use_declared_version = FALSE, timeout = 300)
         options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
         Sys.umask("000")   # see below: the sandbox's user writes into these folders
@@ -164,12 +164,13 @@ do_repocheck <- function(job_dir, job) {
     if (isTRUE(job$run_code)) {
       # metacheck's reproducibility check, running the code: always in the
       # Docker sandbox (api.R gave this process the guard's `docker` and a
-      # temporary folder on the sandbox file system), never installing
-      # packages (so the network stays closed), at most 5 minutes per script.
+      # temporary folder on the sandbox file system), installing missing CRAN
+      # and PyPI packages first (the guard's install container is the only one
+      # with the network; the code runs without it), at most 5 minutes per script.
       modules <- c(modules, "reproducibility_check")
       labels <- c(labels, reproducibility_check = "Running the R and Python code in the sandbox")
       args$reproducibility_check <- c(list(
-        execute = TRUE, sandbox = "docker", install_missing = FALSE,
+        execute = TRUE, sandbox = "docker", install_missing = TRUE,
         docker_use_declared_version = FALSE, timeout = 300), code_place)
       options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
       # The sandbox's user (an unused id on this server) must be able to write
@@ -209,7 +210,7 @@ do_repocheck <- function(job_dir, job) {
   args <- list(
     code_check = fetch, data_check = fetch,
     reproducibility_check = c(list(
-      execute = TRUE, sandbox = "docker", install_missing = FALSE,
+      execute = TRUE, sandbox = "docker", install_missing = TRUE,
       docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
   progress <- file.path(job_dir, "progress.txt")
   on.exit(unlink(c(progress, file.path(job_dir, "cache")), recursive = TRUE), add = TRUE)

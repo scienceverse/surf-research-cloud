@@ -188,7 +188,9 @@ Every hour, `metacheck-psyarxiv-reports.timer` runs `api/psyarxiv-reports-genera
 as the shiny user: for each of the `metacheck_psyarxiv_reports` (default 10) newest
 PsyArXiv preprints without a report for its current version, it asks this server's
 web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
-`report_type=checklist`, every allowed module), one at a time, and keeps it in
+`report_type=checklist`, every allowed module, `run_code=true` so the code of the
+paper's repository runs in the sandbox with `reproducibility_check`), one at a time,
+and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 
@@ -227,8 +229,13 @@ uploaded R and Python code with metacheck's reproducibility check
 (`reproducibility_check(execute = TRUE, sandbox = "docker")`), unless the request
 says `run_code=false` or the box on the website is unticked. The report then shows,
 per script, whether it ran, failed or ran out of time, with its output. Each
-script may run 5 minutes, a job 60 minutes. Packages are never installed at run
-time (`install_missing = FALSE`): the code runs with what the images contain.
+script may run 5 minutes, a job 60 minutes. Packages the images lack are installed
+first (`install_missing = TRUE`), in a container of their own: the only container
+with the network, running only the guard's own install script, for packages from
+CRAN (ready built, from Posit's package manager) and PyPI (wheels only). Packages
+from GitHub or other links are not installed. They go into the guard's packages
+folder for the job (`/var/lib/metacheck-sandbox-lib`, on the large disk), which the
+code then sees read-only; the code itself still runs without the network.
 
 Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
 (~750 R packages, JAGS, a JDK, the geospatial stack) and
@@ -254,7 +261,11 @@ How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-san
    downloaded at run time either), a read-only system, all capabilities dropped,
    no new privileges, a non-root user, at most 512 processes, 4 processors, 16 GB
    memory without swap, files of at most 10 GB, and a `/tmp` without program
-   execution. The only writable mount is the job's own sandbox folder.
+   execution. The only writable mount is the job's own sandbox folder. The one
+   exception is the install container (see above): it has the network and may
+   write into the job's packages folder, but it runs only the guard's own install
+   script, with the names of CRAN and PyPI packages the guard has checked, never a
+   file the job wrote.
 3. **User remapping.** Docker runs with `userns-remap`: users inside a container,
    root included, are unused numbers on the host, never a host account. AppArmor
    and seccomp profiles are on, containers cannot reach each other.
@@ -262,9 +273,9 @@ How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-san
    60 GB file system (`/srv/metacheck-sandbox`, a file on the volume mounted as a
    disk), mounted without device files, privilege changes or program execution,
    so code that fills it cannot fill anything else.
-5. **Cleanup.** A job's containers are stopped and its sandbox folder deleted
-   when the job ends or is stopped; a timer stops any sandbox container after 45
-   minutes and deletes leftover folders.
+5. **Cleanup.** A job's containers are stopped and its sandbox and packages
+   folders deleted when the job ends or is stopped; a timer stops any sandbox
+   container after 45 minutes and deletes leftover folders.
 
 Not run on a workspace that also runs bibr (bibr's containers need other Docker
 settings); `metacheck_run_code = false` switches it off. `GET /api/health` says
