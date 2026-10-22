@@ -59,6 +59,20 @@
     # (files/metacheck/metacheck-auto-update); "false" = only when the
     # playbook runs.
     metacheck_auto_update: "true"
+    # PsyArXiv reports (prototype): every hour, a checklist report for each of
+    # this many newest PsyArXiv preprints that has none yet, shown at
+    # /psyarxiv-reports/?id=<id> with a "report a mistake" button; "0" = off.
+    # See api/psyarxiv_reports.R.
+    metacheck_psyarxiv_reports: "10"
+    # Where "report a mistake" messages are mailed (with the report and a
+    # delete button), and how: an SMTP server address such as
+    # smtps://smtp.gmail.com:465, with its user name and password. "none" =
+    # messages are only saved (<reports folder>/feedback/).
+    metacheck_mail_to: "none"
+    metacheck_mail_from: "none"
+    metacheck_smtp_url: "none"
+    metacheck_smtp_user: "none"
+    metacheck_smtp_password: "none"
 
     # ---- fixed settings ----
     component_label: "metacheck component"
@@ -343,7 +357,6 @@
       ansible.builtin.apt:
         deb: "https://github.com/quarto-dev/quarto-cli/releases/download/v{{ quarto_version }}/quarto-{{ quarto_version }}-linux-amd64.deb"
         state: present
-
     - name: Install Shiny Server
       ansible.builtin.apt:
         deb: "{{ shiny_server_deb }}"
@@ -454,6 +467,36 @@
         group: shiny
         recurse: true
 
+    # PsyArXiv reports (prototype, api/psyarxiv_reports.R): reports/ is read
+    # by nginx (/psyarxiv-reports-files/), feedback/ and deleted/ only by the
+    # shiny user; on the storage volume when there is one.
+    - name: Choose the folder for PsyArXiv reports
+      ansible.builtin.set_fact:
+        metacheck_psyarxiv_reports_dir: "{{ (large_disk ~ '/psyarxiv-reports') if large_disk is match('/data/') else '/var/lib/metacheck-psyarxiv-reports' }}"
+
+    - name: Create the PsyArXiv reports folders
+      ansible.builtin.file:
+        path: "{{ metacheck_psyarxiv_reports_dir }}/{{ item.sub }}"
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "{{ item.mode }}"
+      loop:
+        - { sub: "", mode: "0755" }
+        - { sub: reports, mode: "0755" }
+        - { sub: feedback, mode: "0700" }
+        - { sub: deleted, mode: "0700" }
+
+    - name: Make the key for PsyArXiv report delete links (once, kept on the workspace)
+      ansible.builtin.shell: |
+        f={{ metacheck_component_dir }}/psyarxiv-reports.secret
+        mkdir -p {{ metacheck_component_dir }}
+        [ -s "$f" ] || (umask 077; openssl rand -hex 32 > "$f")
+        cat "$f"
+      register: psyarxiv_reports_secret
+      changed_when: false
+      no_log: true
+
     - name: Write environment for the shiny user (bibr token, LLM keys)
       ansible.builtin.template:
         src: templates/metacheck/Renviron.j2
@@ -537,6 +580,8 @@
       loop:
         - { src: api/api.R, dest: api.R }
         - { src: api/worker.R, dest: worker.R }
+        - { src: api/psyarxiv_reports.R, dest: psyarxiv_reports.R }
+        - { src: api/psyarxiv-reports-generate.R, dest: psyarxiv-reports-generate.R }
         - { src: app/bibr_client.R, dest: bibr_client.R }
       register: api_files
 
@@ -596,6 +641,51 @@
       until: api_up.status == 200
       retries: 30
       delay: 2
+
+    # PsyArXiv reports (prototype): psyarxiv-reports-generate.R every hour, as
+    # the shiny user, through the web interface above; off when
+    # metacheck_psyarxiv_reports is "0".
+    - name: Install the PsyArXiv reports service and timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: metacheck-psyarxiv-reports.service
+          content: |
+            # Managed by the metacheck SURF Research Cloud component.
+            [Unit]
+            Description=metacheck: reports on the newest PsyArXiv preprints (prototype)
+            After=metacheck-api.service
+            Requires=metacheck-api.service
+            [Service]
+            Type=oneshot
+            User=shiny
+            Group=shiny
+            Environment=HOME=/home/shiny
+            Environment=METACHECK_API_LOCAL=http://127.0.0.1:{{ metacheck_api_port }}
+            WorkingDirectory={{ metacheck_component_dir }}/api
+            ExecStart=/usr/bin/Rscript {{ metacheck_component_dir }}/api/psyarxiv-reports-generate.R
+            Nice=10
+        - name: metacheck-psyarxiv-reports.timer
+          content: |
+            # Managed by the metacheck SURF Research Cloud component.
+            [Unit]
+            Description=metacheck: reports on the newest PsyArXiv preprints, every hour
+            [Timer]
+            OnBootSec=15min
+            OnUnitInactiveSec=1h
+            [Install]
+            WantedBy=timers.target
+
+    - name: Switch the PsyArXiv reports on or off (metacheck_psyarxiv_reports = {{ metacheck_psyarxiv_reports }})
+      ansible.builtin.systemd:
+        name: metacheck-psyarxiv-reports.timer
+        enabled: "{{ (metacheck_psyarxiv_reports | int) > 0 }}"
+        state: "{{ 'started' if (metacheck_psyarxiv_reports | int) > 0 else 'stopped' }}"
+        daemon_reload: true
 
     # ------------------------------------------------------------------
     # Installing new versions by itself (metacheck_auto_update)
@@ -716,11 +806,11 @@
           location = / {
               rewrite ^ /site/ last;
           }
-          location ~ ^/(datamanager|researchbox|psyarxiv)$ {
+          location ~ ^/(datamanager|researchbox|psyarxiv|psyarxiv-reports)$ {
               return 301 /$1/;
           }
-          location ~ ^/(datamanager|researchbox|psyarxiv)/(.*)$ {
-              rewrite ^/(datamanager|researchbox|psyarxiv)/(.*)$ /site/$1/$2 last;
+          location ~ ^/(datamanager|researchbox|psyarxiv|psyarxiv-reports)/(.*)$ {
+              rewrite ^/(datamanager|researchbox|psyarxiv|psyarxiv-reports)/(.*)$ /site/$1/$2 last;
           }
       when: nginx_locations.stat.exists
       register: root_nginx

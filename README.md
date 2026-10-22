@@ -182,6 +182,44 @@ a 502/503 while the server restarts for an update is tried again) and
 for testing. Tested in Edge (22 October 2026): link parsing, the PsyArXiv record and
 its checks, an unknown id, and the layout.
 
+### PsyArXiv reports (prototype)
+
+Every hour, `metacheck-psyarxiv-reports.timer` runs `api/psyarxiv-reports-generate.R`
+as the shiny user: for each of the `metacheck_psyarxiv_reports` (default 10) newest
+PsyArXiv preprints without a report for its current version, it asks this server's
+web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
+`report_type=checklist`, every allowed module), one at a time, and keeps it in
+`<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
+`<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
+
+- **`/psyarxiv-reports/`** (`site/psyarxiv-reports/`) lists the reports;
+  **`/psyarxiv-reports/?id=<id>`** shows one, under a bar with the preprint's title,
+  version and date, the metacheck version, and *"If the report contains mistakes,
+  let us know."* with a **Report a mistake** button. This is the address PsyArXiv
+  could link to. The report itself is a static file at `/psyarxiv-reports-files/<id>.html`.
+- **Report a mistake** asks what is wrong and, optionally, the reader's email
+  address (`POST /api/psyarxiv-reports/<id>/feedback`, at most 5 an hour per
+  visitor). The message is saved in `feedback/` and mailed to `metacheck_mail_to`
+  through `metacheck_smtp_url` (with `metacheck_smtp_user`/`_password`), with the
+  report attached and a red **Delete this report** button.
+- The button opens **`/psyarxiv-reports/?delete=<id>&key=<key>`**, which asks for
+  confirmation (`POST /api/psyarxiv-reports/<id>/delete`). The key is an HMAC of the
+  id with a secret made once on the workspace
+  (`/opt/metacheck-component/psyarxiv-reports.secret`), so only links from those
+  mails can delete. A deleted report leaves `deleted/<id>.json` and is not made again.
+- Without mail settings the messages are only saved; read them with
+  `sudo ls <storage volume>/psyarxiv-reports/feedback/`.
+- A preprint whose file is a Word document (`.docx`, about one in four new ones) is
+  sent to bibr as it is: bibr reads .docx natively. An old `.doc` (none in a sample of
+  200 preprints from 2017 to 2026) is refused.
+
+Tested on 22 October 2026 with a local plumber server and the real helpers,
+endpoints and page: list, report view, unknown id, feedback saved, wrong and right
+delete keys, delete and its marker, deleting twice, the mail (built and checked,
+with the report attached, not sent), and fetching a Word and a PDF preprint. Not
+tested: bibr converting a .docx on the workspace, sending mail through a real SMTP
+server, and the timer.
+
 ## Running a repository's code
 
 The repository check (`/api/repocheck`, column 2 of the website) also runs the

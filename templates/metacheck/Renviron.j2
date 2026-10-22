@@ -38,3 +38,20 @@ MISTRAL_API_KEY={{ metacheck_mistral_api_key }}
 {% if metacheck_groq_api_key != 'none' %}
 GROQ_API_KEY={{ metacheck_groq_api_key }}
 {% endif %}
+
+# PsyArXiv reports (prototype; api/psyarxiv_reports.R): the folder, how many
+# newest preprints get a report, and the key of the delete links.
+PSYARXIV_REPORTS_DIR={{ metacheck_psyarxiv_reports_dir }}
+PSYARXIV_REPORTS_NEWEST={{ metacheck_psyarxiv_reports }}
+PSYARXIV_REPORTS_SECRET={{ psyarxiv_reports_secret.stdout }}
+{% if metacheck_mail_to != 'none' and metacheck_smtp_url != 'none' %}
+
+# Where "report a mistake" messages are mailed, and through which SMTP server.
+MAIL_TO={{ metacheck_mail_to }}
+{% if metacheck_mail_from != 'none' %}
+MAIL_FROM={{ metacheck_mail_from }}
+{% endif %}
+SMTP_URL={{ metacheck_smtp_url }}
+SMTP_USER={{ metacheck_smtp_user if metacheck_smtp_user != 'none' else '' }}
+SMTP_PASSWORD={{ metacheck_smtp_password if metacheck_smtp_password != 'none' else '' }}
+{% endif %}

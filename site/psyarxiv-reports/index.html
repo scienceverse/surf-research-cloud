@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PsyArXiv Reports</title>
+<meta name="description" content="Metacheck's checklist reports on the newest PsyArXiv preprints (prototype).">
+<link rel="icon" type="image/png" href="/site/images/logo.png">
+<link rel="stylesheet" href="/site/site.css">
+<link rel="stylesheet" href="/site/check-pages.css">
+<link rel="stylesheet" href="/site/psyarxiv-reports/reports.css">
+</head>
+<body>
+<header class="topbar">
+  <a href="/psyarxiv-reports/"><img src="/site/images/logo.png" alt="Metacheck logo" width="40"></a>
+  <span class="brand">Metacheck reports on PsyArXiv preprints</span>
+  <span class="proto">prototype</span>
+</header>
+<main id="view"><p class="note pad">Loading…</p></main>
+
+<dialog id="mistake">
+  <form method="dialog" id="mistake-form">
+    <h2>Report a mistake</h2>
+    <p>What is wrong in the report? For example a check that flags something that is fine, or that misses something.</p>
+    <textarea name="message" rows="6" maxlength="5000" placeholder="Which check, and what is wrong"></textarea>
+    <label>Your email address <span class="note">(optional, if we may reply)</span>
+      <input type="email" name="email" maxlength="200" autocomplete="email"></label>
+    <p class="dialog-status" role="status"></p>
+    <div class="dialog-buttons">
+      <button type="button" class="secondary" value="cancel" id="mistake-cancel">Cancel</button>
+      <button type="submit" class="mistake-button" id="mistake-send">Send</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/site/psyarxiv-reports/reports.js"></script>
+</body>
+</html>
