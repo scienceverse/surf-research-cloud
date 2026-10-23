@@ -189,28 +189,34 @@ as the shiny user: for each of the `metacheck_psyarxiv_reports` (default 10) new
 PsyArXiv preprints without a report for its current version, it asks this server's
 web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
 `report_type=checklist`, every allowed module, `run_code=true` so the code of the
-paper's repository runs in the sandbox with `reproducibility_check`), one at a time,
-and keeps it in
+paper's repository runs in the sandbox with `reproducibility_check`, `crossref=true`:
+preprints are public, and the reference checks need the Crossref lookup; set
+`bibr_crossref_email` on the bibr server so Crossref answers at its faster rate), one
+at a time, and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 
 - **`/psyarxiv-reports/`** (`site/psyarxiv-reports/`) lists the reports;
   **`/psyarxiv-reports/?id=<id>`** shows one, under a bar with the preprint's title,
   version and date, the metacheck version, and *"If the report contains mistakes,
-  let us know."* with a **Report a mistake** button. This is the address PsyArXiv
-  could link to. The report itself is a static file at `/psyarxiv-reports-files/<id>.html`.
-- **Report a mistake** asks what is wrong and, optionally, the reader's email
-  address (`POST /api/psyarxiv-reports/<id>/feedback`, at most 5 an hour per
-  visitor). The message is saved in `feedback/` and mailed to `metacheck_mail_to`
-  through `metacheck_smtp_url` (with `metacheck_smtp_user`/`_password`), with the
-  report attached and a red **Delete this report** button.
-- The button opens **`/psyarxiv-reports/?delete=<id>&key=<key>`**, which asks for
-  confirmation (`POST /api/psyarxiv-reports/<id>/delete`). The key is an HMAC of the
-  id with a secret made once on the workspace
+  let us know."* with two links: **Report a mistake by email** (a mail to
+  metacheck.scienceverse@gmail.com) and **Report a mistake on GitHub** (a new issue on
+  scienceverse/metacheck), both with the preprint and the report's address filled
+  in (`MISTAKE_MAIL` and `MISTAKE_ISSUES` in `site/psyarxiv-reports/reports.js`).
+  This is the address PsyArXiv could link to. The report itself is a static file at
+  `/psyarxiv-reports-files/<id>.html`.
+- Not in use yet (no SMTP account): the web interface can also take a message
+  (`POST /api/psyarxiv-reports/<id>/feedback`, at most 5 an hour per visitor), save
+  it in `feedback/` and mail it to `metacheck_mail_to` through `metacheck_smtp_url`
+  (with `metacheck_smtp_user`/`_password`), with the report attached and a red
+  **Delete this report** button. That button opens
+  **`/psyarxiv-reports/?delete=<id>&key=<key>`**, which asks for confirmation
+  (`POST /api/psyarxiv-reports/<id>/delete`). The key is an HMAC of the id with a
+  secret made once on the workspace
   (`/opt/metacheck-component/psyarxiv-reports.secret`), so only links from those
   mails can delete. A deleted report leaves `deleted/<id>.json` and is not made again.
-- Without mail settings the messages are only saved; read them with
-  `sudo ls <storage volume>/psyarxiv-reports/feedback/`.
+  The page has no form for it now; to use it, set the mail settings and bring back
+  the form (git history of `site/psyarxiv-reports/`).
 - A preprint whose file is a Word document (`.docx`, about one in four new ones) is
   sent to bibr as it is: bibr reads .docx natively. An old `.doc` (none in a sample of
   200 preprints from 2017 to 2026) is refused.
@@ -229,7 +235,11 @@ uploaded R and Python code with metacheck's reproducibility check
 (`reproducibility_check(execute = TRUE, sandbox = "docker")`), unless the request
 says `run_code=false` or the box on the website is unticked. The report then shows,
 per script, whether it ran, failed or ran out of time, with its output. Each
-script may run 5 minutes, a job 60 minutes. Packages the images lack are installed
+script may run 5 minutes, a job 60 minutes. All scripts together must be done 10
+minutes before the job's limit (`total_timeout` as a clock time, metacheck 0.4.1.5
+and later; `CODE_REPORT_MINUTES` in `api/worker.R`): then a running script is
+stopped and the rest are not started, so the report still comes back with what
+ran. Packages the images lack are installed
 first (`install_missing = TRUE`), in a container of their own: the only container
 with the network, running only the guard's own install script, for packages from
 CRAN (ready built, from Posit's package manager) and PyPI (wheels only). Packages
@@ -451,6 +461,9 @@ uses Crossref.
 Every paper or folder becomes a job in one queue, whichever request sent it. At most two jobs
 run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
 keeps answering while they run; at most 20 wait, and further uploads get HTTP 503.
+While the interface is not running (during an automatic update, or a restart),
+nginx answers HTTP 503 with a JSON `error` and `Retry-After: 120` instead of its
+own "502 Bad Gateway" page.
 `/jobs` answers at once and suits web pages and long papers; `/report`, `/check` and
 `/convert` keep the connection open until their job is finished, so they are one line
 of code. A job is stopped after 30 minutes. A new 16-page paper took about 60 s from
@@ -770,6 +783,12 @@ module has a newer commit, the script
 4. starts the web interface again, restarts Shiny Server when metacheck changed
    (its R processes keep the old version loaded), and checks that the web
    interface answers.
+
+The script and the playbook never install at the same time: the script holds
+`/run/metacheck-auto-update.lock` while it runs and skips a turn when the lock is
+taken, and the playbook takes that lock (after waiting up to 30 minutes for a
+running update) through a helper unit, `metacheck-playbook-hold`, until it ends.
+A playbook run that stops early leaves the helper running for at most an hour.
 
 Every version on `metacheck_ref` goes live this way, also an unfinished one;
 to install only releases, set `metacheck_ref` to a tag. The script changes

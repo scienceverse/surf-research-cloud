@@ -3,8 +3,9 @@
 # the PSYARXIV_REPORTS_NEWEST newest PsyArXiv preprints that has none yet for
 # its current version (and was not deleted through a delete link), through
 # this server's own web interface (POST /jobs, kind=report, psyarxiv=<id>,
-# report_type=checklist, every allowed module, run_code=true, one job at a
-# time). Writes
+# report_type=checklist, every allowed module, run_code=true, crossref=true,
+# one job at a time; preprints are public, so their reference lists may go to
+# Crossref, which the reference checks need). Writes
 # <PSYARXIV_REPORTS_DIR>/reports/<id>.html and <id>.json; see
 # psyarxiv_reports.R. Run as shiny by metacheck-psyarxiv-reports.timer.
 
@@ -41,7 +42,8 @@ for (p in newest) {
   res <- tryCatch({
     resp <- httr2::request(paste0(API, "/jobs")) |>
       httr2::req_body_multipart(kind = "report", psyarxiv = id, report_type = "checklist",
-                                modules = paste(modules, collapse = ","), source = "code",
+                                modules = paste(modules, collapse = ","), crossref = "true",
+                                source = "code",
                                 # also run the code of the paper's repository in the
                                 # sandbox (reproducibility_check), where the server has one
                                 run_code = "true") |>

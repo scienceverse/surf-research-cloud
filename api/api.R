@@ -56,9 +56,12 @@ MIN_FREE_DISK_MB <- 10000           # refuse new jobs when less is free (as the 
 USAGE_DIR <- Sys.getenv("METACHECK_USAGE_DIR", file.path(JOBS_DIR, "..", "metacheck-usage"))
 
 # The modules the paper report app offers (app/app.R, VALIDATED_MODULES).
+# ref_accuracy is left out for now: it counted references whose DOI only
+# Crossref found neither as checked nor as without a DOI, and most of its
+# flags are errors in reading the PDF (metacheck NEWS, 0.4.1.5).
 ALLOWED_MODULES <- c(
   "power", "marginal", "prereg_check", "ethics_check",
-  "ref_pubpeer", "ref_retraction", "ref_replication", "ref_accuracy",
+  "ref_pubpeer", "ref_retraction", "ref_replication",
   "stat_check", "stat_p_exact", "stat_p_nonsig", "stat_effect_size",
   "repo_check", "code_check", "data_check", "codebook_check"
 )
@@ -157,7 +160,10 @@ running <- new.env()          # job id -> callr process
     # folders, are made there), and its `docker` is the guard's command.
     tmp <- file.path(SANDBOX_ROOT, id, "tmp")
     dir.create(tmp, recursive = TRUE, mode = "0700")
+    # METACHECK_JOB_LIMIT_MINUTES: the worker ends the code run in time for the
+    # report (worker.R, .code_deadline())
     env <- c(env, TMPDIR = tmp, METACHECK_JOB_ID = id,
+             METACHECK_JOB_LIMIT_MINUTES = SANDBOX_TIMEOUT_MINUTES,
              PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":"))
   }
   running[[id]] <- callr::r_bg(

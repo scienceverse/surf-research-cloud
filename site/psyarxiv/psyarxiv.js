@@ -153,14 +153,16 @@ setupLinkCheck(document.getElementById("tool-psyarxiv"), {
   async fields(id, section) {
     const rec = await record(id);   // stops here with PsyArXiv's message for an unknown id
     if (rec.state === "withdrawn") throw new Error("This preprint was withdrawn from PsyArXiv; it has no file to check.");
+    const crossref = section.querySelector("input.crossref-box").checked;
     const fields = {
       kind: "report",
       psyarxiv: id,
       report_type: "checklist",
-      crossref: section.querySelector("input.crossref-box").checked ? "true" : "false",
+      crossref: crossref ? "true" : "false",
       run_code: section.querySelector("input.run-code").checked ? "true" : "false"
     };
-    if (allowedModules && allowedModules.length) fields.modules = allowedModules.join(",");
+    const modules = allowedModules || [];
+    if (modules.length) fields.modules = modules.join(",");
     return fields;
   },
   filename: id => "psyarxiv_" + id + "_metacheck.html"
