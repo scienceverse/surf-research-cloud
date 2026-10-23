@@ -188,9 +188,11 @@ Every hour, `metacheck-psyarxiv-reports.timer` runs `api/psyarxiv-reports-genera
 as the shiny user: for each of the `metacheck_psyarxiv_reports` (default 10) newest
 PsyArXiv preprints without a report for its current version, it asks this server's
 web interface for metacheck's checklist report (`kind=report`, `psyarxiv=<id>`,
-`report_type=checklist`, every allowed module, `crossref=true`: preprints are public,
-and the reference checks need the Crossref lookup; set `bibr_crossref_email` on the
-bibr server so Crossref answers at its faster rate), one at a time, and keeps it in
+`report_type=checklist`, every allowed module, `run_code=true` so the code of the
+paper's repository runs in the sandbox with `reproducibility_check`, `crossref=true`:
+preprints are public, and the reference checks need the Crossref lookup; set
+`bibr_crossref_email` on the bibr server so Crossref answers at its faster rate), one
+at a time, and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 
@@ -237,8 +239,13 @@ script may run 5 minutes, a job 60 minutes. All scripts together must be done 10
 minutes before the job's limit (`total_timeout` as a clock time, metacheck 0.4.1.5
 and later; `CODE_REPORT_MINUTES` in `api/worker.R`): then a running script is
 stopped and the rest are not started, so the report still comes back with what
-ran. Packages are never installed at run
-time (`install_missing = FALSE`): the code runs with what the images contain.
+ran. Packages the images lack are installed
+first (`install_missing = TRUE`), in a container of their own: the only container
+with the network, running only the guard's own install script, for packages from
+CRAN (ready built, from Posit's package manager) and PyPI (wheels only). Packages
+from GitHub or other links are not installed. They go into the guard's packages
+folder for the job (`/var/lib/metacheck-sandbox-lib`, on the large disk), which the
+code then sees read-only; the code itself still runs without the network.
 
 Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
 (~750 R packages, JAGS, a JDK, the geospatial stack) and
@@ -262,9 +269,14 @@ How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-san
    the checked parts and logs every decision (`journalctl -t metacheck-sandbox`).
 2. **Locked-down containers.** No network (`--network none`; no images are
    downloaded at run time either), a read-only system, all capabilities dropped,
-   no new privileges, a non-root user, at most 512 processes, 4 processors, 16 GB
-   memory without swap, files of at most 10 GB, and a `/tmp` without program
-   execution. The only writable mount is the job's own sandbox folder.
+   no new privileges, a non-root user, at most 512 processes, 4 processors and 16 GB
+   memory without swap (by default; see "A smaller metacheck workspace"), files
+   of at most 10 GB, and a `/tmp` without program
+   execution. The only writable mount is the job's own sandbox folder. The one
+   exception is the install container (see above): it has the network and may
+   write into the job's packages folder, but it runs only the guard's own install
+   script, with the names of CRAN and PyPI packages the guard has checked, never a
+   file the job wrote.
 3. **User remapping.** Docker runs with `userns-remap`: users inside a container,
    root included, are unused numbers on the host, never a host account. AppArmor
    and seccomp profiles are on, containers cannot reach each other.
@@ -272,9 +284,9 @@ How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-san
    60 GB file system (`/srv/metacheck-sandbox`, a file on the volume mounted as a
    disk), mounted without device files, privilege changes or program execution,
    so code that fills it cannot fill anything else.
-5. **Cleanup.** A job's containers are stopped and its sandbox folder deleted
-   when the job ends or is stopped; a timer stops any sandbox container after 45
-   minutes and deletes leftover folders.
+5. **Cleanup.** A job's containers are stopped and its sandbox and packages
+   folders deleted when the job ends or is stopped; a timer stops any sandbox
+   container after 45 minutes and deletes leftover folders.
 
 Not run on a workspace that also runs bibr (bibr's containers need other Docker
 settings); `metacheck_run_code = false` switches it off. `GET /api/health` says
@@ -341,9 +353,65 @@ and gave the same results as the local model; without the token the entrance
 answers HTTP 401.
 
 For a workspace without a GPU, use a catalog item like "metacheck server" but
-without the CUDA component and with CPU flavours; 8 or more cores and 32 GB or more
-are advisable, since a sandbox container may use 4 cores and 16 GB and two jobs
-can run at once.
+without the CUDA component and with CPU flavours. With the defaults, 8 or more
+cores and 32 GB or more are advisable, since a sandbox container may use 4 cores
+and 16 GB and two jobs can run at once; a smaller workspace works too (next
+section).
+
+## A smaller metacheck workspace
+
+What the workspace needs is set by how many jobs run at once and by what the code
+of one job may use in the sandbox:
+
+- `metacheck_api_workers = 1`: one job at a time; the others wait in the queue
+  (at most 20). A new 16-page paper takes about 60 s.
+- `metacheck_sandbox_cpus` and `metacheck_sandbox_memory` (both `auto`): what one
+  job's code may use. `auto` gives 4 processors and 16 GB, and less on a small
+  workspace: never more processors than it has (Docker refuses a container that
+  asks for more), and at most its memory minus 4 GB, divided among the jobs that
+  may run at once. Docker stops code that needs more memory. The playbook writes the limits to
+  `/etc/metacheck-sandbox.conf`, which the guard reads (only when root owns it and
+  nobody else can write it, so a job cannot raise its own limits), and to the web
+  interface's service.
+- `metacheck_psyarxiv_reports = 0`: no hourly reports on new PsyArXiv preprints,
+  which otherwise keep the queue busy.
+- A model on another server, or the bibr workspace's: the metacheck workspace then
+  needs no GPU.
+
+The rest needs little: while a job ran on the 8-core, 64 GB workspace (October
+2026), the web interface's R process used 0.15 GB, the job's R process 0.6 GB,
+Shiny Server and Docker 0.2 GB together. The disk needs do not change: the sandbox's
+60 GB file system and the two images.
+
+## A model on another server
+
+With `metacheck_llm = url`, the power check (in the app and the web interface) and
+the installed modules use the model of another server, through its
+OpenAI-compatible address (`/v1/chat/completions`; vLLM, Ollama, LiteLLM and
+similar gateways all offer one):
+
+```
+metacheck_llm=url
+metacheck_llm_url=https://spike-gateway-runai-aiteam.inference.spike.tue.nl/v1
+metacheck_llm_api_key=<the key>
+metacheck_llm_model=DeepSeek-V41-Flash-1017-FP8
+metacheck_llm_name=TU/e's SPIKE-1
+metacheck_llm_max_tokens=16000
+```
+
+The playbook asks the server for its models (`/v1/models`) and says whether it
+answers and lists `metacheck_llm_model`; it goes on either way. The app names the
+server in its privacy note and says the paragraphs are sent there. The installed
+modules treat this model as the workspace's own: `tue_datamanager_check`, which
+otherwise only uses a local model, sends the README and up to three documents of a
+package to it. So name only a server you trust with what people upload.
+
+TU/e's SPIKE-1 answers only on TU/e's network or VPN. From the metacheck workspace
+on SURF Research Cloud its gateway did not answer on 23 October 2026 (no
+connection within 20 s), while other TU/e servers did. Using it from SURF needs
+SPIKE-1's administrators (supercomputing@tue.nl) to let the workspace's outgoing
+address through (`curl -s https://ifconfig.me` on the workspace; a new workspace
+may get another one).
 
 ## A public metacheck app
 
@@ -447,8 +515,16 @@ separately, so one never stands in for the other. The paper report app does the
 same: its "Query CrossRef" box (unticked by default) now also decides whether bibr
 uses Crossref.
 
+When bibr does not answer (the job asks it first, for 5 s) or cannot convert a PDF,
+the job converts it with the GROBID server in `metacheck_grobid_url` (TU/e's by
+default), through metacheck's own `convert()`. GROBID reads PDFs only, not Word
+files, and its conversion is less complete than bibr's. The report says at its top
+which one converted the PDF, and `/jobs/{id}` and the JSON of `/check` give it as
+`converter` (`bibr` or `grobid`). The paper report app (`/metacheck/`) is not
+affected: there the visitor chooses the converter.
+
 Every paper or folder becomes a job in one queue, whichever request sent it. At most two jobs
-run at a time (`METACHECK_API_WORKERS`), each in its own R process, so the interface
+run at a time (`metacheck_api_workers`), each in its own R process, so the interface
 keeps answering while they run; at most 20 wait, and further uploads get HTTP 503.
 While the interface is not running (during an automatic update, or a restart),
 nginx answers HTTP 503 with a JSON `error` and `Retry-After: 120` instead of its
@@ -624,9 +700,17 @@ and `auto` means "decide on the workspace".
 | `metacheck_modules` | `Lakens/tue_datamanager_check` | modules to install from GitHub (`owner/repo`, separated by commas or spaces; `none` = none), with `metacheck::module_install()` into `/opt/metacheck-component/modules` (`METACHECK_MODULES_DIR`); each set-up updates them to the newest commit. Needs metacheck 0.4.0.4 or later; a module that cannot be installed is reported and skipped (see "Installed modules") |
 | `metacheck_bibr_url` | `auto` | `auto` = the bibr on this workspace, if any; `none` = no bibr; or an address such as `http://10.10.10.12:8000` |
 | `metacheck_bibr_api_key` | `none` | bibr's token; required with an address |
-| `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU; `none` = no local model |
-| `metacheck_llm_model` | `qwen3.5:4b` | Ollama model tag; on a workspace of its own, a larger model fits |
+| `metacheck_grobid_url` | `https://grobid.hti.ieis.tue.nl` | the GROBID server the web interface converts a PDF with when bibr fails or there is none; `none` = no fallback |
+| `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU, otherwise the bibr workspace's; `bibr` = always the bibr workspace's; `url` = another server's (see "A model on another server"); `none` = no model |
+| `metacheck_llm_model` | `qwen3.5:4b` | Ollama model tag; on a workspace of its own, a larger model fits; with `url`, the name the other server gives the model |
 | `metacheck_ollama_context` | `16384` | Ollama's context window in tokens |
+| `metacheck_llm_url` | `none` | with `metacheck_llm = url`: the other server's OpenAI-compatible address, with or without `/v1` |
+| `metacheck_llm_api_key` | `none` | with `url`: that server's key (sent as `Authorization: Bearer`); `none` = no key |
+| `metacheck_llm_name` | `none` | with `url`: the name the app shows for that server; `none` = its host name |
+| `metacheck_llm_max_tokens` | `none` | the longest answer, in tokens, the server's model may give; `none` = metacheck's default. A model that reasons first needs more (16000 for DeepSeek on SPIKE-1) |
+| `metacheck_api_workers` | `2` | web interface jobs at a time; the others wait in the queue |
+| `metacheck_sandbox_cpus` | `auto` | processors one job's code may use in the sandbox; `auto` = 4, or fewer when the workspace has fewer |
+| `metacheck_sandbox_memory` | `auto` | memory one job's code may use, such as `8G` or `6000M`; `auto` = 16G, or less: the workspace's memory minus 4G, shared among `metacheck_api_workers` jobs |
 | `metacheck_mistral_api_key`, `metacheck_groq_api_key` | `none` | keys for the app's cloud model providers (optional) |
 | `metacheck_max_upload` | `100M` | largest PDF nginx accepts |
 | `metacheck_public` | `false` | `true` opens the app and the web interface to anyone, without the SRAM login (see "A public metacheck app") |

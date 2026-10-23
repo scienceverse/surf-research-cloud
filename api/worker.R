@@ -59,9 +59,74 @@ CODE_REPORT_MINUTES <- 10
     llm_use(TRUE)
     llm_model(paste0("vllm/", Sys.getenv("METACHECK_LLM_MODEL")))
     llm_max_calls(200L)
+    # a model that reasons before it answers needs longer answers
+    # (metacheck_llm_max_tokens)
+    max_tokens <- suppressWarnings(as.integer(Sys.getenv("METACHECK_LLM_MAX_TOKENS")))
+    if (!is.na(max_tokens) && max_tokens > 0) llm_max_tokens(max_tokens)
   } else {
     llm_use(FALSE)
   }
+}
+
+# The PDF (or .docx) as bibr JSON: from bibr, or, when bibr fails, from the
+# GROBID server in METACHECK_GROBID_URL (metacheck_grobid_url; TU/e's by
+# default), through metacheck's own convert(). GROBID reads PDFs only and
+# gives a less complete conversion, so the job records which one was used.
+# Returns list(json = <path>, converter = "bibr" | "grobid").
+.convert_paper <- function(input, job_dir, ext, crossref, file_name) {
+  bibr_error <- NULL
+  if (!nzchar(Sys.getenv("BIBR_API_URL"))) {
+    bibr_error <- "This server has no bibr server."
+  } else if (!bibr_ready()) {
+    # asked first (5 s), so a bibr that is switched off does not keep the
+    # job waiting for the connection to time out
+    bibr_error <- "The bibr server does not answer."
+  } else {
+    json <- tryCatch(bibr_convert(input, job_dir, crossref = crossref, file_name = file_name),
+                     error = function(e) { bibr_error <<- conditionMessage(e); NULL })
+    if (!is.null(json)) return(list(json = json, converter = "bibr"))
+  }
+  grobid <- Sys.getenv("METACHECK_GROBID_URL")
+  if (!nzchar(grobid) || ext != ".pdf") stop(bibr_error, call. = FALSE)
+  .set_status(job_dir, step = "converting the PDF with GROBID (bibr could not convert it)")
+  json <- tryCatch(
+    metacheck::convert(input, job_dir, method = "grobid", api_url = grobid,
+                       keep_xml = FALSE, crossref_lookup = FALSE),
+    error = function(e) {
+      stop(bibr_error, " The GROBID server could not convert it either (",
+           conditionMessage(e), ").", call. = FALSE)
+    })
+  if (length(json) != 1 || is.na(json) || !file.exists(json)) {
+    stop(bibr_error, " The GROBID server could not convert it either.", call. = FALSE)
+  }
+  list(json = json, converter = "grobid")
+}
+
+# A line at the top of an HTML report saying what converted the PDF.
+.add_converter_note <- function(html, converter) {
+  if (is.null(converter) || !nzchar(html)) return(html)
+  note <- if (identical(converter, "grobid")) {
+    paste("The PDF was converted by a GROBID server, because bibr could not convert it.",
+          "GROBID's conversion is less complete than bibr's, so some checks may find less.")
+  } else {
+    "The PDF was converted by bibr."
+  }
+  div <- paste0('<div class="metacheck-converter" style="margin:8px auto;max-width:1200px;',
+                'padding:6px 12px;font-size:0.9em;border-left:4px solid ',
+                if (identical(converter, "grobid")) "#c77700" else "#999", ';">', note, '</div>')
+  sub("(<body[^>]*>)", paste0("\\1", div), html)
+}
+
+# What one job's code may use in the Docker sandbox (metacheck_sandbox_cpus and
+# metacheck_sandbox_memory, which the playbook writes into the web interface's
+# service); the guard holds the same limits and never allows more.
+.sandbox_limits <- function() {
+  num <- function(var, default) {
+    x <- suppressWarnings(as.numeric(Sys.getenv(var)))
+    if (is.na(x) || x <= 0) default else x
+  }
+  list(cpus = num("METACHECK_SANDBOX_CPUS", 4),
+       memory_gb = num("METACHECK_SANDBOX_MEMORY_MB", 16384) / 1024)
 }
 
 # The repository check app's code, in its own environment: its report and
@@ -156,14 +221,14 @@ do_repocheck <- function(job_dir, job) {
       }
       if (isTRUE(job$run_code)) {
         # the module runs the code with metacheck's reproducibility check, as
-        # for a repository check: in the Docker sandbox, never installing
-        # packages, at most 5 minutes per script (see below)
+        # for a repository check: in the Docker sandbox, installing missing
+        # CRAN and PyPI packages first, at most 5 minutes per script (see below)
         margs$run_code <- TRUE
-        margs$run_args <- list(sandbox = "docker", install_missing = FALSE,
+        margs$run_args <- list(sandbox = "docker", install_missing = TRUE,
                                docker_use_declared_version = FALSE, timeout = 300)
         deadline <- .code_deadline(job_dir)
         if (!is.null(deadline)) margs$run_args$total_timeout <- deadline
-        options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+        options(metacheck.docker_resource_limits = .sandbox_limits())
         Sys.umask("000")   # see below: the sandbox's user writes into these folders
       }
       rc$use_shiny_progress()
@@ -183,16 +248,17 @@ do_repocheck <- function(job_dir, job) {
     if (isTRUE(job$run_code)) {
       # metacheck's reproducibility check, running the code: always in the
       # Docker sandbox (api.R gave this process the guard's `docker` and a
-      # temporary folder on the sandbox file system), never installing
-      # packages (so the network stays closed), at most 5 minutes per script.
+      # temporary folder on the sandbox file system), installing missing CRAN
+      # and PyPI packages first (the guard's install container is the only one
+      # with the network; the code runs without it), at most 5 minutes per script.
       modules <- c(modules, "reproducibility_check")
       labels <- c(labels, reproducibility_check = "Running the R and Python code in the sandbox")
       args$reproducibility_check <- c(list(
-        execute = TRUE, sandbox = "docker", install_missing = FALSE,
+        execute = TRUE, sandbox = "docker", install_missing = TRUE,
         docker_use_declared_version = FALSE, timeout = 300), code_place)
       deadline <- .code_deadline(job_dir)
       if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
-      options(metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+      options(metacheck.docker_resource_limits = .sandbox_limits())
       # The sandbox's user (an unused id on this server) must be able to write
       # into the folders metacheck makes for it; they lie inside this job's
       # own folder on the sandbox file system, which only this server's
@@ -230,7 +296,7 @@ do_repocheck <- function(job_dir, job) {
   args <- list(
     code_check = fetch, data_check = fetch,
     reproducibility_check = c(list(
-      execute = TRUE, sandbox = "docker", install_missing = FALSE,
+      execute = TRUE, sandbox = "docker", install_missing = TRUE,
       docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
   deadline <- .code_deadline(job_dir)
   if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
@@ -238,7 +304,7 @@ do_repocheck <- function(job_dir, job) {
   on.exit(unlink(c(progress, file.path(job_dir, "cache")), recursive = TRUE), add = TRUE)
   options(shiny_progress_file = progress,
           metacheck.repo_cache.dir = file.path(job_dir, "cache"),
-          metacheck.docker_resource_limits = list(cpus = 4, memory_gb = 16))
+          metacheck.docker_resource_limits = .sandbox_limits())
   Sys.umask("000")   # see do_repocheck(): the sandbox's user writes into these folders
   labels <- vapply(modules, function(m) {
     tryCatch(metacheck::module_info(m)$title, error = function(e) m) %||% m
@@ -358,13 +424,18 @@ do_job <- function(job_dir) {
     }
 
     # 1. bibr JSON: convert the PDF (or .docx), or use the uploaded JSON
+    converter <- NULL
     if (job$input_kind == "pdf") {
       .set_status(job_dir, step = if (ext == ".docx") "converting the Word file with bibr" else "converting the PDF with bibr")
       # bibr uses Crossref only when asked (it sends the reference list there)
       # writes <job_dir>/input.json, with the upload's own name in it (the
-      # upload is saved as input.pdf; job$name is its name without extension)
-      json <- bibr_convert(input, job_dir, crossref = isTRUE(job$crossref),
-                           file_name = if (nzchar(job$name %||% "")) paste0(job$name, ext) else NULL)
+      # upload is saved as input.pdf; job$name is its name without extension);
+      # GROBID when bibr fails (.convert_paper())
+      conv <- .convert_paper(input, job_dir, ext, crossref = isTRUE(job$crossref),
+                             file_name = if (nzchar(job$name %||% "")) paste0(job$name, ext) else NULL)
+      json <- conv$json
+      converter <- conv$converter
+      .set_status(job_dir, converter = converter)
     } else {
       json <- input
     }
@@ -421,6 +492,7 @@ do_job <- function(job_dir) {
       html <- if (identical(job$report_type, "checklist")) render_checklist_html(full, paper)
               else render_report_html(full, paper)
       if (job$kind == "report" && !nzchar(html)) stop("The report could not be rendered.")
+      html <- .add_converter_note(html, converter)
     }
     if (job$kind == "report") {
       writeLines(html, file.path(job_dir, "result.html"), useBytes = TRUE)
@@ -431,6 +503,8 @@ do_job <- function(job_dir) {
         summary_text = r$summary_text, table = r$table, summary_table = r$summary_table)))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
+        # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
+        converter = converter,
         paper_info = as.list(info_fields(paper, c("title", "doi"))[1, , drop = FALSE]),
         modules = results,
         report_html = html

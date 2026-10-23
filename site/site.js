@@ -509,7 +509,10 @@ function setupFolderTool(section) {
 // ---- start -------------------------------------------------------------------
 
 setupPaperTool(document.getElementById("tool-report"), "report");
-setupPaperTool(document.getElementById("tool-convert"), "convert");
+// the convert tool may be switched off in index.html
+if (document.getElementById("tool-convert")) {
+  setupPaperTool(document.getElementById("tool-convert"), "convert");
+}
 setupFolderTool(document.getElementById("tool-folder"));
 loadModules(document.getElementById("tool-report"));
 

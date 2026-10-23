@@ -13,7 +13,9 @@
 ##   * OLLAMA_BASE_URL / METACHECK_LLM_MODEL: "This server (local model)" is
 ##     offered first, and preselected, for the optional LLM power check
 ##     (reached through metacheck's "vllm" route; metacheck #494, fixed in
-##     pull request #496, made the "ollama" route fail).
+##     pull request #496, made the "ollama" route fail). With METACHECK_LLM_NAME
+##     the model is on another server, which the app names instead, and
+##     METACHECK_LLM_MAX_TOKENS sets the longest answer.
 ## Two further changes apply everywhere: report jobs switch metacheck's LLM
 ## answer cache off (nothing is kept on disk), and unticking "Query Data
 ## Repositories" also skips prereg_check, which contacts the OSF (#495).
@@ -301,6 +303,9 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     options(metacheck.llm.vllm.base_url =
               paste0(Sys.getenv("OLLAMA_BASE_URL"), "/v1"))
     if (!nzchar(Sys.getenv("VLLM_API_KEY"))) Sys.setenv(VLLM_API_KEY = "ollama")
+    # a model that reasons before it answers needs longer answers
+    max_tokens <- suppressWarnings(as.integer(Sys.getenv("METACHECK_LLM_MAX_TOKENS")))
+    if (!is.na(max_tokens) && max_tokens > 0) metacheck::llm_max_tokens(max_tokens)
   }
   if (use_llm) metacheck::llm_model(llm_model)
 
@@ -420,12 +425,16 @@ LLM_DEFAULT_PROVIDER <- "mistral"
 
 # A model served by Ollama on this server (for example on a SURF Research Cloud
 # workspace) is offered first, and preselected, when OLLAMA_BASE_URL and
-# METACHECK_LLM_MODEL are set. No text leaves the server for this step.
+# METACHECK_LLM_MODEL are set. No text leaves the server for this step, unless
+# METACHECK_LLM_NAME names another server that the model runs on.
+LLM_SERVER_NAME <- Sys.getenv("METACHECK_LLM_NAME")
 if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
   LLM_PROVIDERS <- c(list(local = list(
     label    = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true"))
-      "The bibr server's model (SURF private network)" else "This server (local model)",
+      "The bibr server's model (SURF private network)"
+      else if (nzchar(LLM_SERVER_NAME)) LLM_SERVER_NAME
+      else "This server (local model)",
     # Through metacheck's OpenAI-compatible ("vllm") route to Ollama's /v1
     # address: only that route switches off Qwen's reasoning step for
     # structured calls. Via "ollama/..." every power extraction ran out of
@@ -433,10 +442,15 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     model    = paste0("vllm/", Sys.getenv("METACHECK_LLM_MODEL")),
     key_env  = "OLLAMA_BASE_URL",
     keys_url = "",
-    region   = "local",
+    # "server": another server, chosen by this server's administrators
+    region   = if (nzchar(LLM_SERVER_NAME) &&
+                   !identical(Sys.getenv("METACHECK_LLM_SHARED"), "true")) "server" else "local",
     privacy  = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true")) paste0(
       "The model runs on the bibr server in the same SURF project, reached over ",
       "SURF's private network, so the paragraphs are not sent to an external provider."
+    ) else if (nzchar(LLM_SERVER_NAME)) paste0(
+      "The model runs on ", LLM_SERVER_NAME, ", a server chosen by the ",
+      "administrators of this server; the paragraphs are sent there to be analysed."
     ) else paste0(
       "The model runs on this server, so the paragraphs are not sent to an ",
       "external provider."
@@ -661,6 +675,8 @@ server <- function(input, output, session) {
         " model on ", tags$b(prov$label), ".",
         if (identical(prov$region, "local")) {
           " It runs on this server, so there is no cost to you."
+        } else if (identical(prov$region, "server")) {
+          " This server provides it, so there is no cost to you."
         } else {
           " The API key is provided by this server, so there is no cost to you."
         }
@@ -713,6 +729,9 @@ server <- function(input, output, session) {
     llm_use_text <- if (use_llm && identical(llm_provider()$region, "local")) {
       sprintf("\U0001F512 An LLM is enabled on this server: model %s. Only the power-related paragraphs are used, and they are not sent to an external provider.",
               sub("^[^/]+/", "", llm_provider()$model))
+    } else if (use_llm && identical(llm_provider()$region, "server")) {
+      sprintf("\U0001F310 An LLM is enabled on %s: model %s. Only the power-related paragraphs are sent there.",
+              llm_provider()$label, sub("^[^/]+/", "", llm_provider()$model))
     } else if (use_llm) {
       prov <- llm_provider()
       lock <- if (identical(prov$region, "EU (France)")) "\U0001F6E1️" else "\U0001F310"

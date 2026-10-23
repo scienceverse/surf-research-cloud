@@ -107,8 +107,10 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
   gap: 24px;
   align-items: start;
 }
+/* while the bibr convert tool is switched off (index.html) */
+.columns.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 900px) {
-  .columns { grid-template-columns: minmax(0, 1fr); }
+  .columns, .columns.two { grid-template-columns: minmax(0, 1fr); }
 }
 
 .tool {

@@ -26,8 +26,9 @@
 # whoever submitted a job can fetch its result.
 #
 # PDFs are converted by the bibr server the component is connected to
-# (BIBR_API_URL / BIBR_API_KEY). Only the modules the paper report app offers
-# can be requested.
+# (BIBR_API_URL / BIBR_API_KEY), or, when bibr fails, by the GROBID server in
+# METACHECK_GROBID_URL (see worker.R). Only the modules the paper report app
+# offers can be requested.
 
 suppressPackageStartupMessages({
   library(plumber)
@@ -549,6 +550,8 @@ later::later(.scheduler, 1)
     position = if (identical(st$status, "queued")) .position(id) else NULL,
     progress = progress,
     run_code = if (isTRUE(.read_job(id)$run_code)) TRUE else NULL,
+    # what converted the PDF: "bibr", or "grobid" when bibr failed (worker.R)
+    converter = st$converter,
     created = st$created, started = st$started, finished = st$finished,
     error = st$error,
     status_url = paste0(base, "/jobs/", id),
@@ -605,7 +608,7 @@ later::later(.scheduler, 1)
 # ---- endpoints -----------------------------------------------------------------
 
 #* @apiTitle metacheck on SURF Research Cloud
-#* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back, or a .zip of a data and code folder and get a report on it. PDFs are converted with bibr on SURF Research Cloud. Uploads are deleted once processed, results one hour after they are finished.
+#* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back, or a .zip of a data and code folder and get a report on it. PDFs are converted with bibr on SURF Research Cloud, or with a GROBID server (TU/e's by default) when bibr fails. Uploads are deleted once processed, results one hour after they are finished.
 
 source(file.path(API_DIR, "bibr_client.R"))
 source(file.path(API_DIR, "psyarxiv_reports.R"))

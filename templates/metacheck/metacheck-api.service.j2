@@ -19,6 +19,12 @@ Environment=METACHECK_USAGE_DIR={{ metacheck_usage_dir }}
 # Whether uploaded repositories' code may be run in the sandbox (tasks/sandbox.yml)
 Environment=METACHECK_SANDBOX={{ 'on' if (metacheck_sandbox_on | bool) else 'off' }}
 Environment=METACHECK_SANDBOX_BIN={{ metacheck_component_dir }}/sandbox-bin
+# Jobs at a time (metacheck_api_workers), and what one job's code may use in
+# the sandbox (metacheck_sandbox_cpus, metacheck_sandbox_memory); the guard
+# holds the same limits (/etc/metacheck-sandbox.conf).
+Environment=METACHECK_API_WORKERS={{ metacheck_api_workers }}
+Environment=METACHECK_SANDBOX_CPUS={{ metacheck_sandbox_cpus_value }}
+Environment=METACHECK_SANDBOX_MEMORY_MB={{ metacheck_sandbox_memory_mb }}
 WorkingDirectory={{ metacheck_component_dir }}/api
 ExecStart=/usr/bin/Rscript -e 'plumber::pr_run(plumber::plumb("api.R"), host = "127.0.0.1", port = {{ metacheck_api_port }}, docs = TRUE)'
 Restart=always
