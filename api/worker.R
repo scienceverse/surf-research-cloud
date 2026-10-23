@@ -88,11 +88,20 @@ CODE_REPORT_MINUTES <- 10
   }
   grobid <- Sys.getenv("METACHECK_GROBID_URL")
   if (!nzchar(grobid) || ext != ".pdf") stop(bibr_error, call. = FALSE)
-  .set_status(job_dir, step = if (nzchar(Sys.getenv("BIBR_API_URL")))
-    "converting the PDF with GROBID (bibr could not convert it)" else "converting the PDF with GROBID")
-  json <- tryCatch(
+  .set_status(job_dir, step = paste0(
+    "converting the PDF with GROBID",
+    if (crossref) " and looking up the references at Crossref" else "",
+    if (nzchar(Sys.getenv("BIBR_API_URL"))) " (bibr could not convert it)" else ""))
+  # With crossref (asked for by the visitor, and always by the PsyArXiv
+  # reports), metacheck completes the reference list at Crossref, as bibr
+  # does; when that lookup fails, the PDF is converted again without it.
+  grobid_convert <- function(lookup) {
     metacheck::convert(input, job_dir, method = "grobid", api_url = grobid,
-                       keep_xml = FALSE, crossref_lookup = FALSE),
+                       keep_xml = FALSE, crossref_lookup = lookup)
+  }
+  json <- tryCatch(
+    if (crossref) tryCatch(grobid_convert(TRUE), error = function(e) grobid_convert(FALSE))
+    else grobid_convert(FALSE),
     error = function(e) {
       stop(bibr_error, " The GROBID server could not convert it either (",
            conditionMessage(e), ").", call. = FALSE)

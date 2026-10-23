@@ -542,7 +542,11 @@ bibr completes references through Crossref only when a request includes
 list is not sent to Crossref. bibr stores conversions with and without Crossref
 separately, so one never stands in for the other. The paper report app does the
 same: its "Query CrossRef" box (unticked by default) now also decides whether bibr
-uses Crossref.
+uses Crossref. When GROBID converts the PDF in the web interface (no bibr, or bibr
+failed), `crossref=true` has metacheck complete the reference list at Crossref
+(`convert(crossref_lookup = TRUE)`, by DOI or by the reference's text); when that
+lookup fails, the PDF is converted again without it. The PsyArXiv reports always
+ask for Crossref.
 
 When bibr does not answer (the job asks it first, for 5 s) or cannot convert a PDF,
 the job converts it with the GROBID server in `metacheck_grobid_url` (TU/e's by
