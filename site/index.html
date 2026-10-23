@@ -19,7 +19,9 @@
 <main>
   <p class="intro">Metacheck screens scientific manuscripts to identify potential issues or areas for improvement and guide researchers in adopting best practices. It is a module based open source tool. For information on the available modules, see the <a href="https://www.scienceverse.org/metacheck_book/" target="_blank" rel="noopener">manual</a>. Upload a paper or a folder below and you will receive a report with automated checks within minutes. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, with an open source language model. This tool is GDPR compliant.</p>
 
-  <div class="columns">
+  <!-- "two": two columns while the bibr convert tool (3, below) is switched
+       off; remove the class when the tool is back. -->
+  <div class="columns two">
 
     <!-- 1. Metacheck on a paper -->
     <section class="tool" id="tool-report" data-kind="report">
@@ -61,7 +63,10 @@
       <div class="status" hidden></div>
     </section>
 
-    <!-- 3. Convert a paper -->
+    <!-- 3. Convert a paper: switched off for now (October 2026). To bring it
+         back, remove the two lines "BIBR CONVERT OFF" around it, and the class
+         "two" of the columns above. site.js sets it up when it is on the page.
+    BIBR CONVERT OFF
     <section class="tool" id="tool-convert" data-kind="convert">
       <h2>Convert a Paper with bibr</h2>
       <p class="lead">Turn a PDF into a structured JSON file with <a href="https://github.com/scienceverse/bibr" target="_blank" rel="noopener">bibr</a>.</p>
@@ -73,6 +78,7 @@
       <button type="button" class="go" disabled>Convert to JSON</button>
       <div class="status" hidden></div>
     </section>
+    BIBR CONVERT OFF -->
 
   </div>
 
@@ -81,7 +87,7 @@
     <p><a href="/researchbox/">ResearchBox Check</a>: the data and code in a ResearchBox. <a href="/datamanager/">TU/e Data Manager Check</a>: a data package against TU/e's archiving guidelines, as TU/e's data managers check it.</p>
 
     <h2>What happens to your files</h2>
-    <p>Uploaded files are deleted as soon as they have been read. Reports are kept for one hour. A report can only be fetched with its random job number, which only your browser knows. Nothing is sent to external services, the tool is fully GDPR compliant.</p>
+    <p>Uploaded files are deleted as soon as they have been read. Reports are kept for one hour. A report can only be fetched with its random job number, which only your browser knows. Nothing is sent to external services, the tool is fully GDPR compliant. One exception: when the PDF converter on SURF Research Cloud (bibr) does not answer, a PDF is converted by the GROBID server of Eindhoven University of Technology instead, and the report says so.</p>
 
     <h2>Use it from your own code</h2>
     <p>Every tool on this page is also a web interface you can call from R, Python, PowerShell or the command line, for example:</p>

@@ -8,6 +8,12 @@ BIBR_API_URL={{ metacheck_bibr_url_value }}
 BIBR_API_KEY={{ metacheck_bibr_key_value }}
 BIBR_REMOTE={{ 'true' if metacheck_bibr_remote else 'false' }}
 {% endif %}
+{% if metacheck_grobid_url != 'none' %}
+
+# The GROBID server the web interface converts a PDF with when bibr fails
+# (metacheck_grobid_url).
+METACHECK_GROBID_URL={{ metacheck_grobid_url | trim | regex_replace('/+$', '') }}
+{% endif %}
 {% if metacheck_local_llm %}
 
 # Local language model (Ollama on this workspace) for the LLM power check.
@@ -21,6 +27,19 @@ OLLAMA_BASE_URL={{ metacheck_shared_llm_url }}
 VLLM_API_KEY={{ metacheck_bibr_key_value }}
 METACHECK_LLM_MODEL={{ metacheck_llm_model }}
 METACHECK_LLM_SHARED=true
+{% elif metacheck_url_llm | bool %}
+
+# Another server's language model (metacheck_llm = url), through its
+# OpenAI-compatible address, for the LLM power check and the installed modules.
+OLLAMA_BASE_URL={{ metacheck_url_llm_base }}
+VLLM_API_KEY={{ metacheck_llm_api_key if metacheck_llm_api_key != 'none' else '' }}
+METACHECK_LLM_MODEL={{ metacheck_llm_model }}
+METACHECK_LLM_NAME={{ metacheck_llm_name_value }}
+{% endif %}
+{% if metacheck_llm_max_tokens != 'none' and (metacheck_local_llm | bool or metacheck_shared_llm | bool or metacheck_url_llm | bool) %}
+
+# The longest answer the model may give, in tokens (metacheck_llm_max_tokens).
+METACHECK_LLM_MAX_TOKENS={{ metacheck_llm_max_tokens }}
 {% endif %}
 
 # Modules installed from GitHub (metacheck_modules, metacheck::module_install()),

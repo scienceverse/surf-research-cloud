@@ -25,7 +25,8 @@
 # built. The containers that run the code still have no network.
 #
 # Expects: large_disk (tasks/large_disk.yml), metacheck_component_dir,
-# metacheck_sandbox_size, metacheck_sandbox_images.
+# metacheck_sandbox_size, metacheck_sandbox_images,
+# metacheck_sandbox_cpus_value, metacheck_sandbox_memory_mb.
 
 - name: Docker apt key and repository
   block:
@@ -170,6 +171,21 @@
     owner: root
     group: root
     mode: "0755"
+
+# Read by the guard on every call; only root may change it (the guard
+# ignores the file otherwise), so a job cannot raise its own limits.
+- name: Write the sandbox limits for the guard
+  ansible.builtin.copy:
+    dest: /etc/metacheck-sandbox.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the metacheck SURF Research Cloud component.
+      # The most one container of a job may use (metacheck_sandbox_cpus,
+      # metacheck_sandbox_memory); read by /usr/local/sbin/metacheck-sandbox.
+      cpus={{ metacheck_sandbox_cpus_value }}
+      memory_mb={{ metacheck_sandbox_memory_mb }}
 
 - name: Let the shiny user call the guard, and nothing else, as root
   ansible.builtin.copy:
