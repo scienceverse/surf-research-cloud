@@ -473,8 +473,10 @@ later::later(.scheduler, 1)
     stop("A PsyArXiv preprint is checked as a paper (kind=report or kind=check).", call. = FALSE)
   }
   psyarxiv <- if (up$kind == "psyarxiv") .psyarxiv_id(up$fields$psyarxiv) else NULL
-  if (up$kind %in% c("pdf", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL"))) {
-    stop("This server has no bibr: send bibr JSON instead of a PDF.", call. = FALSE)
+  # without bibr, a GROBID server (METACHECK_GROBID_URL) converts the PDF
+  if (up$kind %in% c("pdf", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL")) &&
+      !nzchar(Sys.getenv("METACHECK_GROBID_URL"))) {
+    stop("This server has no PDF converter (bibr or GROBID): send bibr JSON instead of a PDF.", call. = FALSE)
   }
   report_type <- .parse_report_type(up$fields$report_type)
   modules <- if (kind == "convert") character(0)
@@ -631,7 +633,18 @@ function() {
        metacheck_version = as.character(utils::packageVersion("metacheck")),
        jobs_running = length(ls(running)), jobs_waiting = length(.queued_ids()),
        run_code = SANDBOX_ON,
+       # where a PDF goes when bibr cannot convert it: "local" (GROBID on this
+       # server), "remote" (another GROBID server) or "none"; the website
+       # adjusts its privacy text to it
+       grobid = .grobid_kind(),
        workers = MAX_WORKERS)
+}
+
+.grobid_kind <- function() {
+  g <- Sys.getenv("METACHECK_GROBID_URL")
+  if (!nzchar(g)) "none"
+  else if (grepl("^https?://(127\\.0\\.0\\.1|localhost)(:|/|$)", g)) "local"
+  else "remote"
 }
 
 # Each allowed module's title and description, from metacheck's module list

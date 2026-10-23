@@ -76,8 +76,14 @@
       [Service]
       Environment=OLLAMA_HOST={{ ollama_host }}:11434
       Environment=OLLAMA_MODELS={{ ollama_models_dir }}
-      # keep the model in GPU memory between papers
+      # keep the model in (GPU) memory between papers
       Environment=OLLAMA_KEEP_ALIVE=-1
+      {% if ollama_on_cpu | default(false) | bool %}
+      # No GPU: the model runs on the processors, with half the weight of
+      # other programs, so the website and code runs are not slowed down much
+      # while it answers.
+      CPUWeight=50
+      {% endif %}
       Environment=OLLAMA_MAX_LOADED_MODELS=2
       # Ollama's default window of 4,096 tokens cut off bibr's title step
       # (3,602 tokens of input left no room for the answer).
