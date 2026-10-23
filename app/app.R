@@ -252,10 +252,16 @@ VALIDATED_MODULES <- c(
   "repo_check", "code_check", "data_check", "codebook_check"
 )
 
-# Remote GROBID servers offered (no "local" option on a server).
-GROBID_SERVERS <- list(
-  metacheck   = "https://grobid.hti.ieis.tue.nl",
-  huggingface = "https://grobidOrg-grobid.hf.space"
+# GROBID servers offered. GROBID on this server (a SURF Research Cloud
+# workspace with metacheck_grobid_url = local, which sets GROBID_LOCAL_URL) is
+# offered first, and preselected when there is no bibr.
+GROBID_LOCAL_URL <- Sys.getenv("GROBID_LOCAL_URL")
+GROBID_SERVERS <- c(
+  if (nzchar(GROBID_LOCAL_URL)) list(local_grobid = GROBID_LOCAL_URL),
+  list(
+    metacheck   = "https://grobid.hti.ieis.tue.nl",
+    huggingface = "https://grobidOrg-grobid.hf.space"
+  )
 )
 
 # PDF converters offered, as arguments for metacheck::convert(). A bibr server
@@ -276,7 +282,8 @@ CONVERTERS <- c(
   },
   lapply(GROBID_SERVERS, function(url) list(method = "grobid", api_url = url))
 )
-DEFAULT_CONVERTER <- if (nzchar(BIBR_URL)) "bibr" else "metacheck"
+DEFAULT_CONVERTER <- if (nzchar(BIBR_URL)) "bibr" else
+  if (nzchar(GROBID_LOCAL_URL)) "local_grobid" else "metacheck"
 
 # One report, run in its own R process (see background_job.R): it starts with
 # nothing loaded, so it loads metacheck and the helper files itself. Errors are
@@ -540,6 +547,8 @@ options_tab <- tabItem(
       "grobid_server_choice", "PDF Conversion Server:",
       choiceNames = c(
         if (nzchar(BIBR_URL)) list(BIBR_LABEL),
+        if (nzchar(GROBID_LOCAL_URL))
+          list("Use GROBID on this server (the PDF is converted here)"),
         list(
           "Use GDPR compliant GROBID server at Eindhoven University of Technology",
           "Use Full GROBID via HuggingFace (USA)"
@@ -706,6 +715,7 @@ server <- function(input, output, session) {
       } else {
         "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef."
       },
+      "local_grobid" = "\U0001F512 The PDF file is converted on this server with GROBID; it is not sent to another server.",
       "metacheck"   = "\U0001F6E1️ The PDF file is converted using a GDPR compliant server at Eindhoven University of Technology.",
       "huggingface" = "\U0001F310 The PDF file is converted using an external server (HuggingFace, USA).",
       "The PDF file is converted using an external server."

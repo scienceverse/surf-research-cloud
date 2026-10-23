@@ -1,0 +1,74 @@
+---
+# GROBID on this workspace (metacheck_grobid_url = local): the PDF converter
+# for the web interface when bibr fails or there is none, and for the paper
+# report app ("Use GROBID on this server"). GROBID's image without deep
+# learning models (CRF only, about 0.5 GB) needs no GPU. It runs in Docker as
+# the service metacheck-grobid, reachable only from this workspace
+# (127.0.0.1:8070), with at most 4G of memory (Java may use 75% of it).
+#
+# Expects: metacheck_grobid_image. Needs Docker, which tasks/sandbox.yml
+# installs (metacheck_run_code = true).
+
+- name: Check for Docker
+  ansible.builtin.stat:
+    path: /usr/bin/docker
+  register: grobid_docker
+
+- name: Note that GROBID needs Docker
+  ansible.builtin.debug:
+    msg: >-
+      GROBID is not installed: it runs in Docker, which this playbook installs
+      only for running code (metacheck_run_code = true). PDFs are then only
+      converted by bibr.
+  when: not grobid_docker.stat.exists
+
+- name: GROBID in Docker
+  when: grobid_docker.stat.exists
+  block:
+    - name: Download the GROBID image
+      ansible.builtin.command: docker pull -q {{ metacheck_grobid_image }}
+      register: grobid_pull
+      changed_when: false
+      retries: 2
+      delay: 30
+      until: grobid_pull.rc == 0
+
+    - name: Install the GROBID service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/metacheck-grobid.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by the metacheck SURF Research Cloud component.
+          [Unit]
+          Description=GROBID for metacheck's PDF conversion (127.0.0.1:8070)
+          After=docker.service
+          Requires=docker.service
+          [Service]
+          ExecStartPre=-/usr/bin/docker rm -f metacheck-grobid
+          ExecStart=/usr/bin/docker run --rm --name metacheck-grobid --init --pull never \
+            -p 127.0.0.1:8070:8070 --memory 4g --memory-swap 4g --ulimit core=0 \
+            -e JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75 {{ metacheck_grobid_image }}
+          ExecStop=/usr/bin/docker stop --time 10 metacheck-grobid
+          Restart=always
+          RestartSec=10
+          [Install]
+          WantedBy=multi-user.target
+      register: grobid_service
+
+    - name: Enable and (re)start GROBID
+      ansible.builtin.systemd:
+        name: metacheck-grobid
+        enabled: true
+        daemon_reload: true
+        state: "{{ 'restarted' if grobid_service.changed else 'started' }}"
+
+    - name: Wait for GROBID to answer
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8070/api/isalive
+        return_content: true
+      register: grobid_up
+      until: grobid_up.status == 200 and 'true' in (grobid_up.content | default(''))
+      retries: 60
+      delay: 5

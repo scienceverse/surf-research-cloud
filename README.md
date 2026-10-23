@@ -383,6 +383,35 @@ The rest needs little: while a job ran on the 8-core, 64 GB workspace (October
 Shiny Server and Docker 0.2 GB together. The disk needs do not change: the sandbox's
 60 GB file system and the two images.
 
+## A workspace without bibr
+
+A metacheck workspace can convert PDFs and run the LLM power check without a
+GPU and without bibr:
+
+```
+metacheck_bibr_url=none
+metacheck_grobid_url=local
+metacheck_llm=ollama-cpu
+```
+
+- `metacheck_grobid_url = local` runs GROBID on the workspace (`tasks/grobid.yml`):
+  the image without deep learning models (`metacheck_grobid_image`,
+  `grobid/grobid:0.9.1-crf`, about 0.5 GB), in Docker as the service
+  `metacheck-grobid`, reachable only from the workspace (`127.0.0.1:8070`), with
+  at most 4 GB of memory. The web interface converts every PDF with it (and says so
+  in the report), and the paper report app offers it first ("Use GROBID on this
+  server"). GROBID reads PDFs only, not Word files, and its conversion is less
+  complete than bibr's. It needs Docker, which the playbook installs for the
+  sandbox (`metacheck_run_code`).
+- `metacheck_llm = ollama-cpu` runs Ollama with `metacheck_llm_model` on the
+  processors, with half the processor weight of other programs (`CPUWeight=50`),
+  so the website and code runs keep theirs. On a 2-core workspace (October 2026),
+  the power check of a text with three power analyses took 36 to 51 s and found
+  all three; the model keeps about 4.3 GB of memory.
+- `auto` sandbox memory keeps 4 GB more for GROBID and 4.5 GB more for the model.
+  On `4 Core - 32 GB RAM` with one job at a time, a code run then gets 16 GB; on
+  `2 Core- 16 GB RAM` about 3 GB.
+
 ## A model on another server
 
 With `metacheck_llm = url`, the power check (in the app and the web interface) and
@@ -700,8 +729,8 @@ and `auto` means "decide on the workspace".
 | `metacheck_modules` | `Lakens/tue_datamanager_check` | modules to install from GitHub (`owner/repo`, separated by commas or spaces; `none` = none), with `metacheck::module_install()` into `/opt/metacheck-component/modules` (`METACHECK_MODULES_DIR`); each set-up updates them to the newest commit. Needs metacheck 0.4.0.4 or later; a module that cannot be installed is reported and skipped (see "Installed modules") |
 | `metacheck_bibr_url` | `auto` | `auto` = the bibr on this workspace, if any; `none` = no bibr; or an address such as `http://10.10.10.12:8000` |
 | `metacheck_bibr_api_key` | `none` | bibr's token; required with an address |
-| `metacheck_grobid_url` | `https://grobid.hti.ieis.tue.nl` | the GROBID server the web interface converts a PDF with when bibr fails or there is none; `none` = no fallback |
-| `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU, otherwise the bibr workspace's; `bibr` = always the bibr workspace's; `url` = another server's (see "A model on another server"); `none` = no model |
+| `metacheck_grobid_url` | `https://grobid.hti.ieis.tue.nl` | the GROBID server the web interface converts a PDF with when bibr fails or there is none; `local` = GROBID on this workspace (see "A workspace without bibr"); `none` = no fallback |
+| `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU, otherwise the bibr workspace's; `bibr` = always the bibr workspace's; `ollama-cpu` = a local model on the processors, without a GPU (see "A workspace without bibr"); `url` = another server's (see "A model on another server"); `none` = no model |
 | `metacheck_llm_model` | `qwen3.5:4b` | Ollama model tag; on a workspace of its own, a larger model fits; with `url`, the name the other server gives the model |
 | `metacheck_ollama_context` | `16384` | Ollama's context window in tokens |
 | `metacheck_llm_url` | `none` | with `metacheck_llm = url`: the other server's OpenAI-compatible address, with or without `/v1` |

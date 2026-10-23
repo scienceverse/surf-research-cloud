@@ -39,12 +39,17 @@
     metacheck_bibr_api_key: "none"
     # The GROBID server the web interface converts a PDF with when bibr
     # fails or there is none (metacheck's convert(), method "grobid"); the
-    # report says which one converted it. "none" = no fallback.
+    # report says which one converted it. "local" = GROBID on this workspace
+    # (tasks/grobid.yml, in Docker, no GPU needed; the app offers it too);
+    # "none" = no fallback.
     metacheck_grobid_url: "https://grobid.hti.ieis.tue.nl"
     # The language model for the LLM power check:
     # "ollama" = a local model when this workspace has a GPU, otherwise the
     #   model of the bibr workspace on the private network (bibr.yml,
     #   bibr_share_llm), so this workspace needs no GPU;
+    # "ollama-cpu" = a local model without a GPU, on the processors (slower:
+    #   the power check of three power analyses took 36 to 51 s on 2 cores,
+    #   and the model keeps about 4.5G of memory);
     # "bibr" = always the bibr workspace's model; "url" = the model of
     #   another OpenAI-compatible server (vLLM, Ollama, a gateway such as
     #   TU/e's SPIKE-1) at metacheck_llm_url; "none" = no model (the app's
@@ -109,6 +114,9 @@
     # Docker settings).
     metacheck_run_code: "true"
     metacheck_sandbox_size: "60G"
+    # GROBID's image for metacheck_grobid_url = local: the one without deep
+    # learning models (CRF only, about 0.5 GB), which needs no GPU
+    metacheck_grobid_image: "grobid/grobid:0.9.1-crf"
     metacheck_sandbox_images:
       - ghcr.io/scienceverse/metacheck_r_large:latest
       - ghcr.io/scienceverse/metacheck_py_large:latest
@@ -222,31 +230,41 @@
         that:
           - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_url is regex('^https?://')
           - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_api_key != 'none'
-          - metacheck_grobid_url == 'none' or metacheck_grobid_url is regex('^https?://')
+          - metacheck_grobid_url in ['none', 'local'] or metacheck_grobid_url is regex('^https?://')
         fail_msg: >-
           metacheck_bibr_url must be auto, none, or an address such as
           http://10.10.10.12:8000, and an address needs metacheck_bibr_api_key
           (on the bibr workspace: sudo cat /etc/bibr/api_key);
-          metacheck_grobid_url must be none or an address such as
+          metacheck_grobid_url must be none, local, or an address such as
           https://grobid.hti.ieis.tue.nl.
 
-    # A warning, not an error, as for bibr.
+    - name: Decide which GROBID the web interface falls back to
+      ansible.builtin.set_fact:
+        metacheck_grobid_local: "{{ metacheck_grobid_url == 'local' }}"
+        metacheck_grobid_url_value: >-
+          {{ '' if metacheck_grobid_url == 'none'
+             else ('http://127.0.0.1:8070' if metacheck_grobid_url == 'local'
+                   else (metacheck_grobid_url | trim | regex_replace('/+$', ''))) }}
+
+    # A warning, not an error, as for bibr. A local GROBID is checked once it
+    # is installed (tasks/grobid.yml).
     - name: Check that the GROBID fallback answers
       ansible.builtin.uri:
-        url: "{{ metacheck_grobid_url | trim | regex_replace('/+$', '') }}/api/isalive"
+        url: "{{ metacheck_grobid_url_value }}/api/isalive"
         timeout: 15
         return_content: true
       register: grobid_alive
       failed_when: false
-      when: metacheck_grobid_url != 'none'
+      when: metacheck_grobid_url not in ['none', 'local']
 
     - name: Report the GROBID fallback
       ansible.builtin.debug:
         msg: >-
           {{ 'No GROBID fallback: a PDF that bibr cannot convert is not checked.' if metacheck_grobid_url == 'none'
-             else ('GROBID fallback at ' ~ metacheck_grobid_url ~ ': '
+             else ('GROBID on this workspace (' ~ metacheck_grobid_image ~ '), installed below.' if metacheck_grobid_local | bool
+             else ('GROBID fallback at ' ~ metacheck_grobid_url_value ~ ': '
                    ~ ('it answers.' if (grobid_alive.status | default(0)) == 200 and 'true' in (grobid_alive.content | default(''))
-                      else 'it does not answer now (HTTP ' ~ (grobid_alive.status | default('none')) ~ '); PDFs fail when bibr fails too.')) }}
+                      else 'it does not answer now (HTTP ' ~ (grobid_alive.status | default('none')) ~ '); PDFs fail when bibr fails too.'))) }}
 
     - name: Decide which bibr the app uses
       ansible.builtin.set_fact:
@@ -277,18 +295,20 @@
     - name: Check the model settings
       ansible.builtin.assert:
         that:
-          - metacheck_llm in ['ollama', 'bibr', 'url', 'none']
+          - metacheck_llm in ['ollama', 'ollama-cpu', 'bibr', 'url', 'none']
           - metacheck_llm != 'url' or metacheck_llm_url is regex('^https?://[^/]+')
           - metacheck_llm_max_tokens == 'none' or metacheck_llm_max_tokens is regex('^[1-9][0-9]*$')
         fail_msg: >-
-          metacheck_llm must be ollama, bibr, url or none; with url,
+          metacheck_llm must be ollama, ollama-cpu, bibr, url or none; with url,
           metacheck_llm_url must be an address such as
           https://spike-gateway-runai-aiteam.inference.spike.tue.nl/v1; and
           metacheck_llm_max_tokens must be none or a whole number.
 
     - name: Decide on the local model
       ansible.builtin.set_fact:
-        metacheck_local_llm: "{{ metacheck_llm == 'ollama' and (has_gpu | bool) }}"
+        metacheck_local_llm: "{{ (metacheck_llm == 'ollama' and (has_gpu | bool)) or metacheck_llm == 'ollama-cpu' }}"
+        # a local model on the processors (metacheck_llm = ollama-cpu)
+        metacheck_cpu_llm: "{{ metacheck_llm == 'ollama-cpu' }}"
         # another server's model (metacheck_llm = url): its address without
         # /v1, which the app and the web interface add themselves
         metacheck_url_llm: "{{ metacheck_llm == 'url' }}"
@@ -363,6 +383,7 @@
       vars:
         ollama_model: "{{ metacheck_llm_model }}"
         ollama_context_length: "{{ metacheck_ollama_context }}"
+        ollama_on_cpu: "{{ metacheck_cpu_llm | bool }}"
       when: metacheck_local_llm | bool
 
     # ------------------------------------------------------------------
@@ -656,12 +677,18 @@
     # Docker refuses a container that asks for more processors than the
     # workspace has, so the processors are never more than that. "auto"
     # memory leaves 4G for the rest (web interface, app, jobs' R processes,
-    # Docker), and is a multiple of 256M, at least 1G.
+    # Docker), plus 4G for a local GROBID (its container's limit) and 4.5G
+    # for a model on the processors (ollama-cpu keeps about 4.3G loaded), and
+    # is a multiple of 256M, at least 1G.
     - name: Decide what one job's code may use in the sandbox
       ansible.builtin.set_fact:
         metacheck_sandbox_cpus_value: "{{ [(4 if metacheck_sandbox_cpus == 'auto' else metacheck_sandbox_cpus | float), workspace_size.stdout.split()[0] | int] | min }}"
+        metacheck_sandbox_reserve_mb: "{{ 4096 + (4096 if metacheck_grobid_local | bool else 0) + (4608 if metacheck_cpu_llm | bool else 0) }}"
+
+    - name: Decide how much memory one job's code may use in the sandbox
+      ansible.builtin.set_fact:
         metacheck_sandbox_memory_mb: >-
-          {{ ([[16384, ((workspace_size.stdout.split()[1] | int) - 4096) // (metacheck_api_workers | int) // 256 * 256] | min, 1024] | max)
+          {{ ([[16384, ((workspace_size.stdout.split()[1] | int) - (metacheck_sandbox_reserve_mb | int)) // (metacheck_api_workers | int) // 256 * 256] | min, 1024] | max)
              if metacheck_sandbox_memory == 'auto'
              else ((metacheck_sandbox_memory[:-1] | int) * (1024 if metacheck_sandbox_memory[-1] in 'Gg' else 1)) }}
 
@@ -670,7 +697,8 @@
         msg: >-
           Jobs at a time: {{ metacheck_api_workers }}. One job's code may use
           {{ metacheck_sandbox_cpus_value }} of {{ workspace_size.stdout.split()[0] }} processors and
-          {{ metacheck_sandbox_memory_mb }} MB of {{ workspace_size.stdout.split()[1] }} MB memory.
+          {{ metacheck_sandbox_memory_mb }} MB of {{ workspace_size.stdout.split()[1] }} MB memory
+          ({{ metacheck_sandbox_reserve_mb }} MB kept for the rest{{ ', including GROBID' if metacheck_grobid_local | bool else '' }}{{ ' and the model' if metacheck_cpu_llm | bool else '' }}).
       when: metacheck_run_code | bool
 
     - name: Set up the sandbox
@@ -680,6 +708,11 @@
     - name: Remember whether code can be run
       ansible.builtin.set_fact:
         metacheck_sandbox_on: "{{ (metacheck_run_code | bool) and not sandbox_bibr_here.stat.exists and (metacheck_sandbox_ready | default(false) | bool) }}"
+
+    # After the sandbox, which installs Docker.
+    - name: Run GROBID on this workspace (metacheck_grobid_url = local)
+      ansible.builtin.include_tasks: tasks/grobid.yml
+      when: metacheck_grobid_local | bool
 
     # ------------------------------------------------------------------
     # Web interface (api/): PDF or bibr JSON in, report out

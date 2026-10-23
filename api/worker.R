@@ -88,7 +88,8 @@ CODE_REPORT_MINUTES <- 10
   }
   grobid <- Sys.getenv("METACHECK_GROBID_URL")
   if (!nzchar(grobid) || ext != ".pdf") stop(bibr_error, call. = FALSE)
-  .set_status(job_dir, step = "converting the PDF with GROBID (bibr could not convert it)")
+  .set_status(job_dir, step = if (nzchar(Sys.getenv("BIBR_API_URL")))
+    "converting the PDF with GROBID (bibr could not convert it)" else "converting the PDF with GROBID")
   json <- tryCatch(
     metacheck::convert(input, job_dir, method = "grobid", api_url = grobid,
                        keep_xml = FALSE, crossref_lookup = FALSE),
@@ -105,7 +106,10 @@ CODE_REPORT_MINUTES <- 10
 # A line at the top of an HTML report saying what converted the PDF.
 .add_converter_note <- function(html, converter) {
   if (is.null(converter) || !nzchar(html)) return(html)
-  note <- if (identical(converter, "grobid")) {
+  note <- if (identical(converter, "grobid") && !nzchar(Sys.getenv("BIBR_API_URL"))) {
+    paste("The PDF was converted by GROBID.",
+          "GROBID's conversion is less complete than bibr's, so some checks may find less.")
+  } else if (identical(converter, "grobid")) {
     paste("The PDF was converted by a GROBID server, because bibr could not convert it.",
           "GROBID's conversion is less complete than bibr's, so some checks may find less.")
   } else {

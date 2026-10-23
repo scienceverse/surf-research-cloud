@@ -8,11 +8,18 @@ BIBR_API_URL={{ metacheck_bibr_url_value }}
 BIBR_API_KEY={{ metacheck_bibr_key_value }}
 BIBR_REMOTE={{ 'true' if metacheck_bibr_remote else 'false' }}
 {% endif %}
-{% if metacheck_grobid_url != 'none' %}
+{% if metacheck_grobid_url_value | length > 0 %}
 
 # The GROBID server the web interface converts a PDF with when bibr fails
 # (metacheck_grobid_url).
-METACHECK_GROBID_URL={{ metacheck_grobid_url | trim | regex_replace('/+$', '') }}
+METACHECK_GROBID_URL={{ metacheck_grobid_url_value }}
+{% endif %}
+{% if metacheck_grobid_local | bool %}
+
+# GROBID on this workspace (metacheck_grobid_url = local): the paper report
+# app offers it first, as "Use GROBID on this server".
+GROBID_LOCAL_URL={{ metacheck_grobid_url_value }}
+GROBID_LOCAL_SERVER=true
 {% endif %}
 {% if metacheck_local_llm %}
 

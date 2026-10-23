@@ -521,6 +521,9 @@ document.getElementById("curl-example").textContent =
 
 fetch(API + "/health").then(r => r.json()).then(h => {
   if (h.metacheck_version) document.getElementById("version").textContent = "Metacheck version " + h.metacheck_version + ".";
+  // GROBID on this server (or none): PDFs never go to TU/e's GROBID server
+  const exception = document.getElementById("grobid-exception");
+  if (exception && (h.grobid === "local" || h.grobid === "none")) exception.hidden = true;
   if (h.run_code === false) {
     // this server cannot run code: the checks run without it
     for (const id of ["#tool-folder", "#tool-report"]) {
