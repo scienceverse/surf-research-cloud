@@ -70,6 +70,15 @@ GROQ_API_KEY={{ metacheck_groq_api_key }}
 PSYARXIV_REPORTS_DIR={{ metacheck_psyarxiv_reports_dir }}
 PSYARXIV_REPORTS_NEWEST={{ metacheck_psyarxiv_reports }}
 PSYARXIV_REPORTS_SECRET={{ psyarxiv_reports_secret.stdout }}
+
+# This workspace's public address, for links in messages.
+METACHECK_SITE_URL={{ metacheck_site_url }}
+{% if metacheck_discord_value | length > 0 %}
+
+# A Discord channel's webhook (metacheck_discord_webhook): finished and failed
+# PsyArXiv reports, reported mistakes, problems the server watch finds.
+DISCORD_WEBHOOK_URL={{ metacheck_discord_value }}
+{% endif %}
 {% if metacheck_mail_to != 'none' and metacheck_smtp_url != 'none' %}
 
 # Where "report a mistake" messages are mailed, and through which SMTP server.

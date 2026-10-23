@@ -19,6 +19,8 @@ suppressPackageStartupMessages(library(metacheck))
 source(file.path("metacheck-plumber", "utils", "validators.R"))
 source(file.path("metacheck-plumber", "utils", "helpers.R"))
 source("bibr_client.R")
+# only the checks in LLM_MODULES (the power check) use the model
+source("llm_modules.R")
 
 .now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
 
@@ -56,7 +58,7 @@ CODE_REPORT_MINUTES <- 10
   if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
     options(metacheck.llm.vllm.base_url = paste0(Sys.getenv("OLLAMA_BASE_URL"), "/v1"))
     if (!nzchar(Sys.getenv("VLLM_API_KEY"))) Sys.setenv(VLLM_API_KEY = "ollama")
-    llm_use(TRUE)
+    llm_only_for_listed_modules(TRUE)
     llm_model(paste0("vllm/", Sys.getenv("METACHECK_LLM_MODEL")))
     llm_max_calls(200L)
     # a model that reasons before it answers needs longer answers
@@ -64,7 +66,7 @@ CODE_REPORT_MINUTES <- 10
     max_tokens <- suppressWarnings(as.integer(Sys.getenv("METACHECK_LLM_MAX_TOKENS")))
     if (!is.na(max_tokens) && max_tokens > 0) llm_max_tokens(max_tokens)
   } else {
-    llm_use(FALSE)
+    llm_only_for_listed_modules(FALSE)
   }
 }
 
@@ -217,12 +219,18 @@ do_repocheck <- function(job_dir, job) {
     # the job's step.
     options(shiny_progress_file = file.path(job_dir, "progress.txt"),
             metacheck.repo_cache.dir = file.path(job_dir, "cache"))
+    # no language model: only the power check may use it (llm_modules.R)
+    llm_only_for_listed_modules(FALSE)
     if (length(job$modules)) {
       # An installed module (api.R allows only those: INSTALLED_MODULES), such
       # as tue_datamanager_check: run on the unpacked folder or the link, with
-      # this server's language model, and its own full report. It runs the
-      # metacheck modules it needs itself.
-      .setup_llm()
+      # its own full report. It runs the metacheck modules it needs itself.
+      # No language model, also not for the module's own calls: only the
+      # power check may use it (llm_modules.R). metacheck's default model is
+      # the local Ollama, which tue_datamanager_check would use, so the model
+      # is cleared too.
+      llm_cache(FALSE)
+      llm_model(NULL)
       m <- job$modules[[1]]
       # an unpacked .zip, or a link (checked by api.R: public addresses only),
       # whose files the module fetches itself (100 MB per file, 500 MB in all)
