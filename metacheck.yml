@@ -105,6 +105,12 @@
     metacheck_smtp_url: "none"
     metacheck_smtp_user: "none"
     metacheck_smtp_password: "none"
+    # A Discord channel's webhook (https://discord.com/api/webhooks/...) for
+    # short messages: each finished or failed PsyArXiv report, mistakes readers
+    # report, and problems the server watch finds (api/notify.R, api/watch.R).
+    # Kept in /etc/metacheck-discord-webhook (root only), so "keep" (the
+    # default) keeps an address given before; "none" removes it.
+    metacheck_discord_webhook: "keep"
 
     # ---- fixed settings ----
     component_label: "metacheck component"
@@ -628,6 +634,56 @@
       changed_when: false
       no_log: true
 
+    # ---- messages to Discord (metacheck_discord_webhook) ----
+    - name: Check the Discord setting
+      ansible.builtin.assert:
+        that:
+          - metacheck_discord_webhook in ['keep', 'none'] or metacheck_discord_webhook is regex('^https://(discord|discordapp)[.]com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$')
+        fail_msg: >-
+          metacheck_discord_webhook must be keep, none, or a Discord webhook
+          address (https://discord.com/api/webhooks/...).
+      no_log: true
+
+    - name: Store the Discord webhook (root only)
+      ansible.builtin.copy:
+        dest: /etc/metacheck-discord-webhook
+        content: "{{ metacheck_discord_webhook }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: metacheck_discord_webhook not in ['keep', 'none']
+
+    - name: Remove the Discord webhook
+      ansible.builtin.file:
+        path: /etc/metacheck-discord-webhook
+        state: absent
+      when: metacheck_discord_webhook == 'none'
+
+    - name: Look for a stored Discord webhook
+      ansible.builtin.stat:
+        path: /etc/metacheck-discord-webhook
+      register: discord_webhook_file
+
+    - name: Read the Discord webhook
+      ansible.builtin.slurp:
+        src: /etc/metacheck-discord-webhook
+      register: discord_webhook_content
+      no_log: true
+      when: discord_webhook_file.stat.exists
+
+    - name: Read this workspace's public address
+      ansible.builtin.command: hostname -f
+      register: workspace_fqdn
+      changed_when: false
+      check_mode: false
+
+    - name: Decide the Discord webhook and the address for links
+      ansible.builtin.set_fact:
+        metacheck_discord_value: "{{ (discord_webhook_content.content | b64decode | trim) if discord_webhook_file.stat.exists else '' }}"
+        metacheck_site_url: "https://{{ workspace_fqdn.stdout | trim }}"
+      no_log: true
+
     - name: Write environment for the shiny user (bibr token, LLM keys)
       ansible.builtin.template:
         src: templates/metacheck/Renviron.j2
@@ -762,7 +818,10 @@
         - { src: api/worker.R, dest: worker.R }
         - { src: api/psyarxiv_reports.R, dest: psyarxiv_reports.R }
         - { src: api/psyarxiv-reports-generate.R, dest: psyarxiv-reports-generate.R }
+        - { src: api/notify.R, dest: notify.R }
+        - { src: api/watch.R, dest: watch.R }
         - { src: app/bibr_client.R, dest: bibr_client.R }
+        - { src: app/llm_modules.R, dest: llm_modules.R }
       register: api_files
 
     # The website: static files, served by nginx (location /site/).
@@ -865,6 +924,58 @@
         name: metacheck-psyarxiv-reports.timer
         enabled: "{{ (metacheck_psyarxiv_reports | int) > 0 }}"
         state: "{{ 'started' if (metacheck_psyarxiv_reports | int) > 0 else 'stopped' }}"
+        daemon_reload: true
+
+    # The server watch (api/watch.R): every 15 minutes, as the shiny user;
+    # only with a Discord webhook, where it reports problems.
+    - name: Create the server watch's folder
+      ansible.builtin.file:
+        path: /var/lib/metacheck-watch
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
+
+    - name: Install the server watch service and timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: metacheck-watch.service
+          content: |
+            # Managed by the metacheck SURF Research Cloud component.
+            [Unit]
+            Description=metacheck: check the server, report problems to Discord
+            [Service]
+            Type=oneshot
+            User=shiny
+            Group=shiny
+            Environment=HOME=/home/shiny
+            Environment=METACHECK_API_LOCAL=http://127.0.0.1:{{ metacheck_api_port }}
+            Environment=METACHECK_API_JOBS={{ metacheck_api_jobs_dir }}
+            Environment=METACHECK_WATCH_STATE=/var/lib/metacheck-watch/state.json
+            WorkingDirectory={{ metacheck_component_dir }}/api
+            ExecStart=/usr/bin/Rscript {{ metacheck_component_dir }}/api/watch.R
+            Nice=10
+        - name: metacheck-watch.timer
+          content: |
+            # Managed by the metacheck SURF Research Cloud component.
+            [Unit]
+            Description=metacheck: check the server every 15 minutes
+            [Timer]
+            OnBootSec=10min
+            OnUnitActiveSec=15min
+            [Install]
+            WantedBy=timers.target
+
+    - name: Switch the server watch on or off (on with a Discord webhook)
+      ansible.builtin.systemd:
+        name: metacheck-watch.timer
+        enabled: "{{ metacheck_discord_value | length > 0 }}"
+        state: "{{ 'started' if metacheck_discord_value | length > 0 else 'stopped' }}"
         daemon_reload: true
 
     # ------------------------------------------------------------------

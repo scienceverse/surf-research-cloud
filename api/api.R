@@ -613,6 +613,7 @@ later::later(.scheduler, 1)
 #* @apiDescription Send a scientific paper (PDF, or bibr JSON) and get metacheck's report or results back, or a .zip of a data and code folder and get a report on it. PDFs are converted with bibr on SURF Research Cloud, or with a GROBID server (TU/e's by default) when bibr fails. Uploads are deleted once processed, results one hour after they are finished.
 
 source(file.path(API_DIR, "bibr_client.R"))
+source(file.path(API_DIR, "notify.R"))
 source(file.path(API_DIR, "psyarxiv_reports.R"))
 # bibr's readiness, asked at most every 10 seconds (bibr can be slow to answer
 # while it converts).

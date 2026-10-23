@@ -412,6 +412,45 @@ metacheck_llm=ollama-cpu
   On `4 Core - 32 GB RAM` with one job at a time, a code run then gets 16 GB; on
   `2 Core- 16 GB RAM` about 3 GB.
 
+## Which checks use the language model
+
+Only the power check (`power`) uses the language model on this server, in the paper
+report app and in the web interface; every other check works by rules only, also
+when the model is available. metacheck has one switch for all checks (`llm_use()`),
+so `app/llm_modules.R` sets it at the start of every check, through a trace on
+metacheck's `module_run()`, which runs every check, also the ones a module such as
+`tue_datamanager_check` runs itself: on for the checks in `LLM_MODULES` when the
+job has a model, off for the rest. The checks that would otherwise use it are
+`codebook_check`, `data_check`, `repo_check`, `psychds_check` and
+`reproducibility_check`; on processors only (`ollama-cpu`) the codebook check alone
+took most of an hour. Installed modules get no model at all, also not for their own
+calls: `tue_datamanager_check` then checks the README by its headings and writes no
+revised README. To let another check use the model, add it to `LLM_MODULES`.
+
+## Messages to Discord
+
+With `metacheck_discord_webhook` set to a Discord channel's webhook address
+(channel settings, Integrations, Webhooks, New Webhook, Copy Webhook URL), the
+server posts short messages there (`api/notify.R`):
+
+- each finished PsyArXiv report: title, preprint id and version, a link to the
+  report (`/psyarxiv-reports/?id=<id>`), the converter and the time it took;
+- each failed PsyArXiv report, with the error, and a run that could not start
+  because PsyArXiv or the web interface did not answer;
+- each mistake a reader reports in a PsyArXiv report, with the reader's message
+  but not their e-mail address;
+- problems the server watch finds (`api/watch.R`, every 15 minutes through
+  `metacheck-watch.timer`, only with a webhook): the web interface, bibr, GROBID or
+  the language model does not answer, or less than 15 GB is free for jobs. It posts
+  when a problem starts and when it is over, not while it lasts.
+
+The address is kept in `/etc/metacheck-discord-webhook` (root only) and written to
+the shiny user's `~/.Renviron`, so a later run with the default `keep` keeps it,
+and `none` removes it. Anyone who has the address can post to the channel, so pass
+it as a parameter only where the workspace logs are not read by others, or put it in
+that file on the workspace yourself. Messages never mention anyone (no `@everyone`,
+whatever a title contains).
+
 ## A model on another server
 
 With `metacheck_llm = url`, the power check (in the app and the web interface) and
@@ -741,6 +780,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_llm_api_key` | `none` | with `url`: that server's key (sent as `Authorization: Bearer`); `none` = no key |
 | `metacheck_llm_name` | `none` | with `url`: the name the app shows for that server; `none` = its host name |
 | `metacheck_llm_max_tokens` | `none` | the longest answer, in tokens, the server's model may give; `none` = metacheck's default. A model that reasons first needs more (16000 for DeepSeek on SPIKE-1) |
+| `metacheck_discord_webhook` | `keep` | a Discord channel's webhook for messages about PsyArXiv reports and server problems (see "Messages to Discord"); `keep` = the one stored before, `none` = none |
 | `metacheck_api_workers` | `2` | web interface jobs at a time; the others wait in the queue |
 | `metacheck_sandbox_cpus` | `auto` | processors one job's code may use in the sandbox; `auto` = 4, or fewer when the workspace has fewer |
 | `metacheck_sandbox_memory` | `auto` | memory one job's code may use, such as `8G` or `6000M`; `auto` = 16G, or less: the workspace's memory minus 4G, shared among `metacheck_api_workers` jobs |

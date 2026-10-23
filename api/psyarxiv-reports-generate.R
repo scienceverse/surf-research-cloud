@@ -16,6 +16,9 @@ API <- Sys.getenv("METACHECK_API_LOCAL", "http://127.0.0.1:2005")
 PSY <- Sys.getenv("PSYARXIV_API", "https://next.psyarxiv.org/api/v1")
 SITE <- sub("/api(/.*)?$", "", PSY)
 UA <- "metacheck SURF Research Cloud server, PsyArXiv reports (scienceverse/surf-research-cloud)"
+# messages to Discord (notify.R): each finished or failed report, and runs
+# that could not start
+source("notify.R")
 
 if (!nzchar(DIR) || is.na(N) || N < 1) quit(save = "no")
 for (d in c("reports", "feedback", "deleted")) dir.create(file.path(DIR, d), recursive = TRUE, showWarnings = FALSE)
@@ -28,9 +31,18 @@ get_json <- function(url) {
 }
 
 modules <- tryCatch(unlist(get_json(paste0(API, "/modules"))$allowed), error = function(e) NULL)
-if (!length(modules)) { log("the web interface did not answer; trying again at the next run"); quit(save = "no") }
+if (!length(modules)) {
+  log("the web interface did not answer; trying again at the next run")
+  notify("PsyArXiv reports: the web interface did not answer; trying again at the next run.")
+  quit(save = "no")
+}
 newest <- tryCatch(get_json(sprintf("%s/preprints?sort=newest&per_page=%d", PSY, min(N, 100)))$results,
-                   error = function(e) { log("PsyArXiv did not answer: ", conditionMessage(e)); NULL })
+                   error = function(e) {
+                     log("PsyArXiv did not answer: ", conditionMessage(e))
+                     notify(paste0("PsyArXiv reports: PsyArXiv did not answer (", conditionMessage(e),
+                                   "); trying again at the next run."))
+                     NULL
+                   })
 
 for (p in newest) {
   id <- p$id
@@ -39,6 +51,7 @@ for (p in newest) {
   if (file.exists(meta_file) &&
       identical(as.integer(jsonlite::read_json(meta_file)$version), as.integer(p$version))) next
   t0 <- Sys.time()
+  converter <- NULL
   res <- tryCatch({
     resp <- httr2::request(paste0(API, "/jobs")) |>
       httr2::req_body_multipart(kind = "report", psyarxiv = id, report_type = "checklist",
@@ -54,7 +67,7 @@ for (p in newest) {
     repeat {
       Sys.sleep(10)
       st <- get_json(paste0(API, "/jobs/", job$id))
-      if (identical(st$status, "done")) break
+      if (identical(st$status, "done")) { converter <- st$converter; break }
       if (identical(st$status, "failed")) stop(st$error %||% "the job failed")
       if (difftime(Sys.time(), t0, units = "mins") > 70) stop("no result after 70 minutes")
     }
@@ -72,5 +85,14 @@ for (p in newest) {
       modules = modules), meta_file, auto_unbox = TRUE, pretty = TRUE)
     "ok"
   }, error = function(e) paste("FAILED:", conditionMessage(e)))
-  log(id, " v", p$version, ": ", res, " (", round(as.numeric(difftime(Sys.time(), t0, units = "secs"))), " s)")
+  secs <- round(as.numeric(difftime(Sys.time(), t0, units = "secs")))
+  log(id, " v", p$version, ": ", res, " (", secs, " s)")
+  title <- gsub("[*_`~|]", "", p$title %||% id)   # no Discord formatting from a title
+  if (identical(res, "ok")) {
+    notify(sprintf("New PsyArXiv report: **%s** (%s, version %s)\n%s/psyarxiv-reports/?id=%s\nPDF converted by %s; %s min.",
+                   title, id, p$version, notify_site(), id, converter %||% "?", round(secs / 60)))
+  } else {
+    notify(sprintf("PsyArXiv report failed: **%s** (%s, version %s)\n%s",
+                   title, id, p$version, sub("^FAILED: ", "", res)))
+  }
 }

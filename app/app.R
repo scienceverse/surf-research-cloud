@@ -294,11 +294,13 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
   suppressPackageStartupMessages(library(metacheck))
   source("render_report.R")
   source("shiny_progress.R")
+  source("llm_modules.R")
   use_shiny_progress()
 
   # This process's own LLM setting; the API keys come from the app's process
-  # environment, which this process inherits.
-  metacheck::llm_use(use_llm)
+  # environment, which this process inherits. Only the checks in LLM_MODULES
+  # (the power check) use the model; see llm_modules.R.
+  llm_only_for_listed_modules(use_llm)
   # metacheck caches model answers, including the paragraphs sent, on disk in
   # the working directory (this app's folder). The app promises not to store
   # manuscript text, so the cache is off for report jobs.

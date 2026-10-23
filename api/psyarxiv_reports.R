@@ -98,6 +98,10 @@ PR_MAX_FEEDBACK_PER_HOUR <- 5L            # per visitor
   f <- file.path(PR_DIR, "feedback", sprintf("%s_%s_%s.json", format(Sys.time(), "%Y%m%d-%H%M%S"), id,
                                              substr(digest::digest(runif(1)), 1, 6)))
   jsonlite::write_json(fb, f, auto_unbox = TRUE, pretty = TRUE)
+  # to Discord too (notify.R), without the reader's e-mail address
+  notify(sprintf("A reader reported a mistake in the PsyArXiv report on **%s** (%s, version %s):\n%s\n%s/psyarxiv-reports/?id=%s",
+                 gsub("[*_`~|]", "", fb$title %||% id), id, fb$version %||% "?",
+                 substr(fb$message, 1, 1200), notify_site(), id))
   fb$mailed
 }
 
