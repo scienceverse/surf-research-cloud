@@ -196,6 +196,20 @@ at a time, and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 
+When the full report fails, for example because a repository is so large that the
+repository checks do not finish within the job's hour, a second try leaves out the
+repository checks (`repo_check`, `code_check`, `data_check`, `codebook_check`) and
+running the code, and the report says so at its top. When that fails too, for
+example for a Word file (GROBID reads only PDFs), a page saying the automated check
+failed is stored instead of a report, with both reasons, so that version is not
+tried again; a new version gets a new attempt. `<id>.json` records which of the
+three it was (`outcome`: `full`, `without_repository_checks` or `failed`). Errors
+of the server itself (the queue is full, the web interface or GROBID is restarting
+or does not answer) leave nothing behind and are tried again at the next run.
+Discord gets one message per preprint, saying which of the three it was.
+`PSYARXIV_REPORTS_ONLY` (preprint ids, separated by commas) makes the script handle
+only those preprints, for testing or to redo one.
+
 - **`/psyarxiv-reports/`** (`site/psyarxiv-reports/`) lists the reports;
   **`/psyarxiv-reports/?id=<id>`** shows one, under a bar with the preprint's title,
   version and date, the metacheck version, and *"If the report contains mistakes,

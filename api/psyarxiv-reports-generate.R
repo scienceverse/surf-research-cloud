@@ -8,6 +8,13 @@
 # Crossref, which the reference checks need). Writes
 # <PSYARXIV_REPORTS_DIR>/reports/<id>.html and <id>.json; see
 # psyarxiv_reports.R. Run as shiny by metacheck-psyarxiv-reports.timer.
+#
+# When the full report fails (a large repository can take longer than the
+# job's hour), a second try leaves out the repository checks and running the
+# code, and says so at the top of the report; when that fails too, a page
+# saying the automated check failed is stored instead, so that version is not
+# tried again. Errors of the server itself (busy, restarting, not answering)
+# leave nothing behind and are tried again at the next run.
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 DIR <- Sys.getenv("PSYARXIV_REPORTS_DIR")
@@ -44,26 +51,40 @@ newest <- tryCatch(get_json(sprintf("%s/preprints?sort=newest&per_page=%d", PSY,
                      NULL
                    })
 
-for (p in newest) {
-  id <- p$id
-  meta_file <- file.path(DIR, "reports", paste0(id, ".json"))
-  if (file.exists(file.path(DIR, "deleted", paste0(id, ".json")))) next
-  if (file.exists(meta_file) &&
-      identical(as.integer(jsonlite::read_json(meta_file)$version), as.integer(p$version))) next
+# For testing, or to redo particular preprints: only these (ids, separated by
+# commas), instead of the newest.
+only <- strsplit(trimws(Sys.getenv("PSYARXIV_REPORTS_ONLY")), "[, ]+")[[1]]
+if (length(only)) newest <- lapply(only, function(id) get_json(paste0(PSY, "/preprints/", id)))
+
+# The repository checks: left out of the second try.
+REPO_MODULES <- c("repo_check", "code_check", "data_check", "codebook_check")
+
+# Errors that say nothing about the preprint (the server or a service was
+# busy, restarting or not answering): no report and no failure page; the next
+# run tries again.
+transient <- function(err) {
+  grepl(paste("queue is full", "did not answer", "service restarted", "Connection refused",
+              "Couldn't connect", "Failed to connect", "Could not resolve", "Timeout was reached",
+              "HTTP 50[234]", sep = "|"), err, ignore.case = TRUE)
+}
+
+# One report through the web interface, saved as `out`, with the code of the
+# paper's repository run when `run_code`. Returns list(ok, converter), or
+# list(ok = FALSE, error).
+make_report <- function(id, mods, run_code, out) {
   t0 <- Sys.time()
-  converter <- NULL
-  res <- tryCatch({
+  tryCatch({
     resp <- httr2::request(paste0(API, "/jobs")) |>
       httr2::req_body_multipart(kind = "report", psyarxiv = id, report_type = "checklist",
-                                modules = paste(modules, collapse = ","), crossref = "true",
+                                modules = paste(mods, collapse = ","), crossref = "true",
                                 source = "code",
-                                # also run the code of the paper's repository in the
-                                # sandbox (reproducibility_check), where the server has one
-                                run_code = "true") |>
+                                # the sandbox (reproducibility_check), where the server has one
+                                run_code = if (run_code) "true" else "false") |>
       httr2::req_error(is_error = function(r) FALSE) |> httr2::req_perform()
     job <- httr2::resp_body_json(resp)
     if (httr2::resp_status(resp) == 503) stop("the queue is full")
     if (httr2::resp_status(resp) >= 400) stop(job$error %||% httr2::resp_status(resp))
+    converter <- NULL
     repeat {
       Sys.sleep(10)
       st <- get_json(paste0(API, "/jobs/", job$id))
@@ -71,28 +92,104 @@ for (p in newest) {
       if (identical(st$status, "failed")) stop(st$error %||% "the job failed")
       if (difftime(Sys.time(), t0, units = "mins") > 70) stop("no result after 70 minutes")
     }
-    out <- file.path(DIR, "reports", paste0(id, ".html"))
     httr2::request(paste0(API, "/jobs/", job$id, "/result")) |> httr2::req_timeout(120) |>
       httr2::req_perform(path = out)
-    rec <- get_json(paste0(PSY, "/preprints/", id))
-    jsonlite::write_json(list(
-      id = id, version = rec$version, title = rec$title,
-      authors = vapply(rec$authors %||% list(), function(a) a$name %||% "", ""),
-      doi = rec$doi, posted = rec$versionPostedAt, first_posted = rec$firstPostedAt,
-      url = paste0(SITE, "/preprint/", id),
-      generated = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"),
-      metacheck_version = as.character(utils::packageVersion("metacheck")),
-      modules = modules), meta_file, auto_unbox = TRUE, pretty = TRUE)
-    "ok"
-  }, error = function(e) paste("FAILED:", conditionMessage(e)))
-  secs <- round(as.numeric(difftime(Sys.time(), t0, units = "secs")))
-  log(id, " v", p$version, ": ", res, " (", secs, " s)")
+    list(ok = TRUE, converter = converter %||% "?")
+  }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
+}
+
+esc <- function(x) htmltools::htmlEscape(x %||% "")
+
+# A line at the top of a report made without the repository checks.
+add_note <- function(out, why) {
+  html <- paste(readLines(out, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  note <- paste0("<div style=\"margin:8px auto;max-width:1200px;padding:6px 12px;font-size:0.9em;",
+                 "border-left:4px solid #c77700;\">The repository checks (the repository, code, ",
+                 "data and codebook checks, and running the code) were left out of this report, ",
+                 "because the full check did not finish: ", esc(why), "</div>")
+  writeLines(sub("(<body[^>]*>)", paste0("\\1", note), html), out, useBytes = TRUE)
+}
+
+# The page shown instead of a report when both tries failed.
+failure_page <- function(out, p, first, second) {
+  writeLines(c(
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>No metacheck report</title>",
+    "<style>body{font-family:sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.5}",
+    "li{margin-bottom:8px}</style></head><body>",
+    "<h1>The automated check failed</h1>",
+    paste0("<p>Metacheck could not make a report on <strong>", esc(p$title), "</strong> (PsyArXiv ",
+           esc(p$id), ", version ", esc(p$version), ").</p>"),
+    "<ul>",
+    paste0("<li>The full check: ", esc(first %||% "-"), "</li>"),
+    paste0("<li>The check without the repository checks: ", esc(second), "</li>"),
+    "</ul>",
+    "<p>This version is not tried again; a new version of the preprint gets a new report.</p>",
+    "</body></html>"), out, useBytes = TRUE)
+}
+
+for (p in newest) {
+  id <- p$id
+  meta_file <- file.path(DIR, "reports", paste0(id, ".json"))
+  if (file.exists(file.path(DIR, "deleted", paste0(id, ".json")))) next
+  if (file.exists(meta_file) &&
+      identical(as.integer(jsonlite::read_json(meta_file)$version), as.integer(p$version))) next
+  t0 <- Sys.time()
+  out <- file.path(DIR, "reports", paste0(id, ".html"))
+  part <- paste0(out, ".part")   # replaces the report only when this run has one
   title <- gsub("[*_`~|]", "", p$title %||% id)   # no Discord formatting from a title
-  if (identical(res, "ok")) {
-    notify(sprintf("New PsyArXiv report: **%s** (%s, version %s)\n%s/psyarxiv-reports/?id=%s\nPDF converted by %s; %s min.",
-                   title, id, p$version, notify_site(), id, converter %||% "?", round(secs / 60)))
+  link <- sprintf("%s/psyarxiv-reports/?id=%s", notify_site(), id)
+  mins <- function() round(as.numeric(difftime(Sys.time(), t0, units = "mins")))
+
+  # 1. the full report: every check, and the code of the paper's repository
+  outcome <- "full"
+  used <- modules
+  first <- NULL
+  r <- make_report(id, modules, TRUE, part)
+  # 2. without the repository checks, when the full report failed for a
+  # reason that has to do with the preprint (a large repository, say)
+  if (!r$ok && !transient(r$error)) {
+    first <- r$error
+    outcome <- "without_repository_checks"
+    used <- setdiff(modules, REPO_MODULES)
+    r <- make_report(id, used, FALSE, part)
+    if (r$ok) add_note(part, first)
+  }
+  if (!r$ok && transient(r$error)) {
+    unlink(part)
+    log(id, " v", p$version, ": not now, trying again at the next run: ", r$error, " (", mins(), " min)")
+    next
+  }
+  # 3. both failed: a page that says so, so that this version is not tried again
+  if (!r$ok) {
+    outcome <- "failed"
+    used <- character(0)
+    failure_page(part, p, first, r$error)
+  }
+  file.rename(part, out)
+  rec <- tryCatch(get_json(paste0(PSY, "/preprints/", id)), error = function(e) p)
+  jsonlite::write_json(list(
+    id = id, version = rec$version %||% p$version, title = rec$title %||% p$title,
+    authors = vapply(rec$authors %||% list(), function(a) a$name %||% "", ""),
+    doi = rec$doi, posted = rec$versionPostedAt, first_posted = rec$firstPostedAt,
+    url = paste0(SITE, "/preprint/", id),
+    generated = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"),
+    metacheck_version = as.character(utils::packageVersion("metacheck")),
+    outcome = outcome, errors = c(first, if (!r$ok) r$error),
+    modules = used), meta_file, auto_unbox = TRUE, pretty = TRUE)
+  log(id, " v", p$version, ": ", outcome,
+      if (length(first)) paste0(" (full check: ", first, ")"),
+      if (!r$ok) paste0(" (second try: ", r$error, ")"), " (", mins(), " min)")
+  if (identical(outcome, "full")) {
+    notify(sprintf("New PsyArXiv report: **%s** (%s, version %s)\n%s\nPDF converted by %s; %s min.",
+                   title, id, p$version, link, r$converter, mins()))
+  } else if (identical(outcome, "without_repository_checks")) {
+    notify(sprintf(paste0("New PsyArXiv report, without the repository checks: **%s** (%s, version %s)\n%s\n",
+                          "The full check did not finish: %s\nPDF converted by %s; %s min."),
+                   title, id, p$version, link, first, r$converter, mins()))
   } else {
-    notify(sprintf("PsyArXiv report failed: **%s** (%s, version %s)\n%s",
-                   title, id, p$version, sub("^FAILED: ", "", res)))
+    notify(sprintf(paste0("PsyArXiv report failed: **%s** (%s, version %s)\n",
+                          "The page says the automated check failed: %s\n",
+                          "Full check: %s\nWithout the repository checks: %s"),
+                   title, id, p$version, link, first %||% "-", r$error))
   }
 }

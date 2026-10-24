@@ -89,7 +89,10 @@ CODE_REPORT_MINUTES <- 10
     if (!is.null(json)) return(list(json = json, converter = "bibr"))
   }
   grobid <- Sys.getenv("METACHECK_GROBID_URL")
-  if (!nzchar(grobid) || ext != ".pdf") stop(bibr_error, call. = FALSE)
+  if (!nzchar(grobid)) stop(bibr_error, call. = FALSE)
+  if (ext != ".pdf") {
+    stop(bibr_error, " GROBID reads only PDF files, and this is a Word file.", call. = FALSE)
+  }
   .set_status(job_dir, step = paste0(
     "converting the PDF with GROBID",
     if (crossref) " and looking up the references at Crossref" else "",
