@@ -43,6 +43,11 @@
     # (tasks/grobid.yml, in Docker, no GPU needed; the app offers it too);
     # "none" = no fallback.
     metacheck_grobid_url: "https://grobid.hti.ieis.tue.nl"
+    # Word files (.docx, such as a quarter of PsyArXiv's preprints) when there
+    # is no bibr, which reads them itself: "local" = LibreOffice on this
+    # workspace (Gotenberg, tasks/docx.yml) makes a PDF, which GROBID then
+    # converts; "none" = Word files cannot be checked without bibr.
+    metacheck_docx_converter: "none"
     # The language model for the LLM power check:
     # "ollama" = a local model when this workspace has a GPU, otherwise the
     #   model of the bibr workspace on the private network (bibr.yml,
@@ -123,6 +128,9 @@
     # GROBID's image for metacheck_grobid_url = local: the one without deep
     # learning models (CRF only, about 0.5 GB), which needs no GPU
     metacheck_grobid_image: "grobid/grobid:0.9.1-crf"
+    # Gotenberg's image with LibreOffice only, for metacheck_docx_converter =
+    # local (about 0.45 GB)
+    metacheck_docx_image: "gotenberg/gotenberg:8.38.1-libreoffice"
     metacheck_sandbox_images:
       - ghcr.io/scienceverse/metacheck_r_large:latest
       - ghcr.io/scienceverse/metacheck_py_large:latest
@@ -237,16 +245,20 @@
           - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_url is regex('^https?://')
           - metacheck_bibr_url in ['auto', 'none'] or metacheck_bibr_api_key != 'none'
           - metacheck_grobid_url in ['none', 'local'] or metacheck_grobid_url is regex('^https?://')
+          - metacheck_docx_converter in ['none', 'local']
         fail_msg: >-
           metacheck_bibr_url must be auto, none, or an address such as
           http://10.10.10.12:8000, and an address needs metacheck_bibr_api_key
           (on the bibr workspace: sudo cat /etc/bibr/api_key);
           metacheck_grobid_url must be none, local, or an address such as
-          https://grobid.hti.ieis.tue.nl.
+          https://grobid.hti.ieis.tue.nl; metacheck_docx_converter must be none
+          or local.
 
     - name: Decide which GROBID the web interface falls back to
       ansible.builtin.set_fact:
         metacheck_grobid_local: "{{ metacheck_grobid_url == 'local' }}"
+        # Word files to PDF with LibreOffice on this workspace (tasks/docx.yml)
+        metacheck_docx_local: "{{ metacheck_docx_converter == 'local' }}"
         metacheck_grobid_url_value: >-
           {{ '' if metacheck_grobid_url == 'none'
              else ('http://127.0.0.1:8070' if metacheck_grobid_url == 'local'
@@ -733,13 +745,13 @@
     # Docker refuses a container that asks for more processors than the
     # workspace has, so the processors are never more than that. "auto"
     # memory leaves 4G for the rest (web interface, app, jobs' R processes,
-    # Docker), plus 6G for a local GROBID (its container's limit) and 4.5G
+    # Docker), plus 6G for a local GROBID and 2G for LibreOffice (their containers' limits) and 4.5G
     # for a model on the processors (ollama-cpu keeps about 4.3G loaded), and
     # is a multiple of 256M, at least 1G.
     - name: Decide what one job's code may use in the sandbox
       ansible.builtin.set_fact:
         metacheck_sandbox_cpus_value: "{{ [(4 if metacheck_sandbox_cpus == 'auto' else metacheck_sandbox_cpus | float), workspace_size.stdout.split()[0] | int] | min }}"
-        metacheck_sandbox_reserve_mb: "{{ 4096 + (6144 if metacheck_grobid_local | bool else 0) + (4608 if metacheck_cpu_llm | bool else 0) }}"
+        metacheck_sandbox_reserve_mb: "{{ 4096 + (6144 if metacheck_grobid_local | bool else 0) + (2048 if metacheck_docx_local | bool else 0) + (4608 if metacheck_cpu_llm | bool else 0) }}"
 
     - name: Decide how much memory one job's code may use in the sandbox
       ansible.builtin.set_fact:
@@ -754,7 +766,7 @@
           Jobs at a time: {{ metacheck_api_workers }}. One job's code may use
           {{ metacheck_sandbox_cpus_value }} of {{ workspace_size.stdout.split()[0] }} processors and
           {{ metacheck_sandbox_memory_mb }} MB of {{ workspace_size.stdout.split()[1] }} MB memory
-          ({{ metacheck_sandbox_reserve_mb }} MB kept for the rest{{ ', including GROBID' if metacheck_grobid_local | bool else '' }}{{ ' and the model' if metacheck_cpu_llm | bool else '' }}).
+          ({{ metacheck_sandbox_reserve_mb }} MB kept for the rest{{ ', including GROBID' if metacheck_grobid_local | bool else '' }}{{ ', LibreOffice' if metacheck_docx_local | bool else '' }}{{ ' and the model' if metacheck_cpu_llm | bool else '' }}).
       when: metacheck_run_code | bool
 
     - name: Set up the sandbox
@@ -769,6 +781,10 @@
     - name: Run GROBID on this workspace (metacheck_grobid_url = local)
       ansible.builtin.include_tasks: tasks/grobid.yml
       when: metacheck_grobid_local | bool
+
+    - name: Run LibreOffice for Word files (metacheck_docx_converter = local)
+      ansible.builtin.include_tasks: tasks/docx.yml
+      when: metacheck_docx_local | bool
 
     # ------------------------------------------------------------------
     # Web interface (api/): PDF or bibr JSON in, report out

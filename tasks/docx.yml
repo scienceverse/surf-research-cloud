@@ -1,0 +1,73 @@
+---
+# Word files to PDF on this workspace (metacheck_docx_converter = local), for
+# the web interface when there is no bibr (which reads Word files itself):
+# Gotenberg, a small web service around LibreOffice, in Docker as the service
+# metacheck-docx, reachable only from this workspace (127.0.0.1:3000), with at
+# most 2G of memory. The web interface sends it a .docx and gives the PDF it
+# returns to GROBID (api/worker.R).
+#
+# Expects: metacheck_docx_image. Needs Docker, which tasks/sandbox.yml
+# installs (metacheck_run_code = true).
+
+- name: Check for Docker
+  ansible.builtin.stat:
+    path: /usr/bin/docker
+  register: docx_docker
+
+- name: Note that the Word converter needs Docker
+  ansible.builtin.debug:
+    msg: >-
+      LibreOffice is not installed: it runs in Docker, which this playbook
+      installs only for running code (metacheck_run_code = true). Word files
+      are then only converted by bibr.
+  when: not docx_docker.stat.exists
+
+- name: LibreOffice in Docker
+  when: docx_docker.stat.exists
+  block:
+    - name: Download the Gotenberg image
+      ansible.builtin.command: docker pull -q {{ metacheck_docx_image }}
+      register: docx_pull
+      changed_when: false
+      retries: 2
+      delay: 30
+      until: docx_pull.rc == 0
+
+    - name: Install the Word converter service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/metacheck-docx.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by the metacheck SURF Research Cloud component.
+          [Unit]
+          Description=LibreOffice (Gotenberg) for metacheck's Word files (127.0.0.1:3000)
+          After=docker.service
+          Requires=docker.service
+          [Service]
+          ExecStartPre=-/usr/bin/docker rm -f metacheck-docx
+          ExecStart=/usr/bin/docker run --rm --name metacheck-docx --init --pull never \
+            -p 127.0.0.1:3000:3000 --memory 2g --memory-swap 2g --ulimit core=0 \
+            {{ metacheck_docx_image }}
+          ExecStop=/usr/bin/docker stop --time 10 metacheck-docx
+          Restart=always
+          RestartSec=10
+          [Install]
+          WantedBy=multi-user.target
+      register: docx_service
+
+    - name: Enable and (re)start the Word converter
+      ansible.builtin.systemd:
+        name: metacheck-docx
+        enabled: true
+        daemon_reload: true
+        state: "{{ 'restarted' if docx_service.changed else 'started' }}"
+
+    - name: Wait for the Word converter to answer
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/health
+      register: docx_up
+      until: docx_up.status == 200
+      retries: 30
+      delay: 3

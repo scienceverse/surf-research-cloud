@@ -21,6 +21,12 @@ METACHECK_GROBID_URL={{ metacheck_grobid_url_value }}
 GROBID_LOCAL_URL={{ metacheck_grobid_url_value }}
 GROBID_LOCAL_SERVER=true
 {% endif %}
+{% if metacheck_docx_local | bool %}
+
+# LibreOffice on this workspace (metacheck_docx_converter = local): makes a
+# PDF of a Word file for GROBID when there is no bibr.
+METACHECK_DOCX_URL=http://127.0.0.1:3000
+{% endif %}
 {% if metacheck_local_llm %}
 
 # Local language model (Ollama on this workspace) for the LLM power check.
