@@ -6,8 +6,9 @@
 // (GET /api/health, local: true), the page shows the second. Within those,
 // an element with data-when="grobid-remote llm-mistral" (for example) is shown
 // only when every word matches the installation: grobid-local or
-// grobid-remote (where PDFs are converted), llm-ollama, llm-mistral or
-// llm-none (the model of the power check). Loaded in the page's <head>, so
+// grobid-remote (where PDFs are converted), backup-surf or backup-none (where
+// they go when that GROBID fails), llm-ollama, llm-mistral or llm-none (the
+// model of the power check). Loaded in the page's <head>, so
 // these texts are hidden before the page is shown.
 (function () {
   const style = document.createElement("style");
@@ -27,7 +28,8 @@
     .then(r => r.json())
     .then(h => {
       if (h.local !== true) return;
-      root.classList.add("local", "grobid-" + (h.grobid || "none"), "llm-" + (h.llm || "none"));
+      root.classList.add("local", "grobid-" + (h.grobid || "none"), "llm-" + (h.llm || "none"),
+                         "backup-" + (h.convert_backup || "none"));
       if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", apply);
       else apply();
     })

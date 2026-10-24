@@ -655,6 +655,11 @@ function() {
        # (set up; it may not run), "mistral" (the user's own key, on their own
        # computer) or "none"; the website adjusts its privacy text to it
        llm = .llm_kind(),
+       # where a PDF goes when an external GROBID fails, in the metacheck
+       # Docker installation: "surf" (metacheck's server on SURF Research
+       # Cloud) or "none"
+       convert_backup = if (identical(Sys.getenv("METACHECK_CONVERT_BACKUP"), "surf") &&
+                            .grobid_kind() == "remote") "surf" else "none",
        workers = MAX_WORKERS)
 }
 

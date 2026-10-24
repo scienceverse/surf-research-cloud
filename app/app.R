@@ -294,6 +294,21 @@ CONVERTERS <- c(
   },
   lapply(GROBID_SERVERS, function(url) list(method = "grobid", api_url = url))
 )
+# On the user's own computer (the metacheck Docker installation), metacheck's
+# server on SURF Research Cloud is offered too, after TU/e's GROBID: a choice
+# when that server does not answer (through metacheck's convert_bibr()).
+if (METACHECK_LOCAL) {
+  CONVERTERS <- append(CONVERTERS, list(surf = list(method = "surf")),
+                       after = match("metacheck", names(CONVERTERS)))
+}
+CONVERTER_LABELS <- c(
+  bibr         = BIBR_LABEL,
+  local_grobid = if (METACHECK_LOCAL) "Use GROBID on this computer (the PDF does not leave your computer)"
+                 else "Use GROBID on this server (the PDF is converted here)",
+  metacheck    = "Use GDPR compliant GROBID server at Eindhoven University of Technology",
+  surf         = "Use metacheck's server on SURF Research Cloud (the Netherlands)",
+  huggingface  = "Use Full GROBID via HuggingFace (USA)"
+)
 DEFAULT_CONVERTER <- if (nzchar(BIBR_URL)) "bibr" else
   if (nzchar(GROBID_LOCAL_URL)) "local_grobid" else "metacheck"
 
@@ -340,6 +355,10 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     # pdf_name: the uploaded file's own name (Shiny saves it as 0.pdf)
     json <- bibr_convert(pdf_path, tmp, api_url = convert_args$api_url,
                          crossref = isTRUE(use_crossref), file_name = pdf_name)
+  } else if (identical(convert_args$method, "surf")) {
+    # metacheck's server on SURF Research Cloud (offered on the user's own
+    # computer), which returns bibr JSON
+    json <- metacheck::convert_bibr(pdf_path, tmp, backend = "surf")
   } else {
     json <- do.call(metacheck::convert,
                     c(list(pdf_path, tmp, crossref_lookup = FALSE), convert_args))
@@ -599,16 +618,7 @@ options_tab <- tabItem(
 
     radioButtons(
       "grobid_server_choice", "PDF Conversion Server:",
-      choiceNames = c(
-        if (nzchar(BIBR_URL)) list(BIBR_LABEL),
-        if (nzchar(GROBID_LOCAL_URL))
-          list(if (METACHECK_LOCAL) "Use GROBID on this computer (the PDF does not leave your computer)"
-               else "Use GROBID on this server (the PDF is converted here)"),
-        list(
-          "Use GDPR compliant GROBID server at Eindhoven University of Technology",
-          "Use Full GROBID via HuggingFace (USA)"
-        )
-      ),
+      choiceNames = unname(as.list(CONVERTER_LABELS[names(CONVERTERS)])),
       choiceValues = as.list(names(CONVERTERS)),
       selected = DEFAULT_CONVERTER
     ),
@@ -788,6 +798,7 @@ server <- function(input, output, session) {
       "local_grobid" = paste0("\U0001F512 The PDF file is converted on ", HERE,
                               " with GROBID; it is not sent to another server."),
       "metacheck"   = "\U0001F6E1️ The PDF file is converted using a GDPR compliant server at Eindhoven University of Technology.",
+      "surf"        = "\U0001F6E1️ The PDF file is converted on metacheck's server on SURF Research Cloud (the Netherlands), which deletes it after the conversion.",
       "huggingface" = "\U0001F310 The PDF file is converted using an external server (HuggingFace, USA).",
       "The PDF file is converted using an external server."
     )
