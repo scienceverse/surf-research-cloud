@@ -45,7 +45,14 @@ JOB_TIMEOUT_MINUTES <- 30
 # Running a repository's code (metacheck's reproducibility check) in the
 # Docker sandbox set up by the playbook (tasks/sandbox.yml): only when the
 # playbook found everything in place (METACHECK_SANDBOX=on).
-SANDBOX_ON <- identical(Sys.getenv("METACHECK_SANDBOX"), "on")
+# In the metacheck Docker image (scienceverse/metacheck_platform_docker),
+# METACHECK_SANDBOX=process: the code runs as a process inside that container,
+# which is then the boundary (worker.R, .code_sandbox()).
+SANDBOX_PROCESS <- identical(Sys.getenv("METACHECK_SANDBOX"), "process")
+SANDBOX_ON <- identical(Sys.getenv("METACHECK_SANDBOX"), "on") || SANDBOX_PROCESS
+# TRUE in that image, which runs this interface on the user's own computer;
+# the website then shows its texts for that computer (site/local.js).
+METACHECK_LOCAL <- identical(tolower(Sys.getenv("METACHECK_LOCAL")), "true")
 SANDBOX_ROOT <- "/srv/metacheck-sandbox"
 SANDBOX_BIN <- Sys.getenv("METACHECK_SANDBOX_BIN", "/opt/metacheck-component/sandbox-bin")
 SANDBOX_TIMEOUT_MINUTES <- 60       # a job that runs code may take longer
@@ -165,7 +172,7 @@ running <- new.env()          # job id -> callr process
     # report (worker.R, .code_deadline())
     env <- c(env, TMPDIR = tmp, METACHECK_JOB_ID = id,
              METACHECK_JOB_LIMIT_MINUTES = SANDBOX_TIMEOUT_MINUTES,
-             PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":"))
+             if (!SANDBOX_PROCESS) c(PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":")))
   }
   running[[id]] <- callr::r_bg(
     function(api_dir, job_dir) {
@@ -184,7 +191,10 @@ running <- new.env()          # job id -> callr process
 # Stops a job's sandbox containers and deletes its sandbox folder (as root,
 # through the guard, since the code's files belong to the sandbox's user).
 .sandbox_cleanup <- function(id) {
-  if (dir.exists(file.path(SANDBOX_ROOT, id))) {
+  if (SANDBOX_PROCESS) {
+    # no containers and no other user: this process deletes the folder itself
+    unlink(file.path(SANDBOX_ROOT, id), recursive = TRUE)
+  } else if (dir.exists(file.path(SANDBOX_ROOT, id))) {
     system2("sudo", c("-n", "/usr/local/sbin/metacheck-sandbox", "cleanup", id),
             stdout = FALSE, stderr = FALSE, wait = FALSE)
   }
@@ -639,14 +649,29 @@ function() {
        # server), "remote" (another GROBID server) or "none"; the website
        # adjusts its privacy text to it
        grobid = .grobid_kind(),
+       sandbox = if (!SANDBOX_ON) "none" else if (SANDBOX_PROCESS) "process" else "docker",
+       local = METACHECK_LOCAL,
+       # the model the power check uses (worker.R, .setup_llm()): "ollama"
+       # (set up; it may not run), "mistral" (the user's own key, on their own
+       # computer) or "none"; the website adjusts its privacy text to it
+       llm = .llm_kind(),
        workers = MAX_WORKERS)
 }
 
+# "local" also for the GROBID container next to this one in the metacheck
+# Docker installation (GROBID_LOCAL_URL, for example http://grobid:8070).
 .grobid_kind <- function() {
   g <- Sys.getenv("METACHECK_GROBID_URL")
   if (!nzchar(g)) "none"
-  else if (grepl("^https?://(127\\.0\\.0\\.1|localhost)(:|/|$)", g)) "local"
+  else if (grepl("^https?://(127\\.0\\.0\\.1|localhost)(:|/|$)", g) ||
+           identical(g, Sys.getenv("GROBID_LOCAL_URL"))) "local"
   else "remote"
+}
+
+.llm_kind <- function() {
+  if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) "ollama"
+  else if (METACHECK_LOCAL && nzchar(Sys.getenv("MISTRAL_API_KEY"))) "mistral"
+  else "none"
 }
 
 # Each allowed module's title and description, from metacheck's module list

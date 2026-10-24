@@ -16,6 +16,11 @@
 ##     pull request #496, made the "ollama" route fail). With METACHECK_LLM_NAME
 ##     the model is on another server, which the app names instead, and
 ##     METACHECK_LLM_MAX_TOKENS sets the longest answer.
+##   * GROBID_LOCAL_URL / METACHECK_LOCAL: set by the metacheck Docker image
+##     (scienceverse/metacheck_platform_docker), which runs this app on the
+##     user's own computer: the GROBID in that image is offered first, and
+##     preselected; the shared-server capacity notes and the wait between
+##     reports are left out; Ollama on the computer is checked before a report.
 ## Two further changes apply everywhere: report jobs switch metacheck's LLM
 ## answer cache off (nothing is kept on disk), and unticking "Query Data
 ## Repositories" also skips prereg_check, which contacts the OSF (#495).
@@ -49,6 +54,12 @@ MAX_UPLOAD_MB <- 50
 options(shiny.maxRequestSize = MAX_UPLOAD_MB * 1024^2,
         scipen = 10,
         digits = 4)
+
+# TRUE when the app runs on the user's own computer (the metacheck Docker
+# image, scienceverse/metacheck_platform_docker): no shared-server capacity
+# notes, no wait between reports, and "this computer" instead of "this server".
+METACHECK_LOCAL <- identical(tolower(Sys.getenv("METACHECK_LOCAL")), "true")
+HERE <- if (METACHECK_LOCAL) "this computer" else "this server"
 
 ## --- usage statistics -------------------------------------------------------
 #
@@ -190,7 +201,7 @@ explain_error <- function(msg) {
 ## as a cross-process semaphore. A running report refreshes its slot (see
 ## bg_watch()), so only a slot left behind by a crashed run goes stale.
 MAX_CONCURRENT_REPORTS <- 4L                 # global cap across all sessions (= core count)
-REPORT_COOLDOWN_SECONDS <- 20                # per-session wait between reports
+REPORT_COOLDOWN_SECONDS <- if (METACHECK_LOCAL) 0 else 20  # per-session wait between reports
 SLOT_STALE_SECONDS      <- 600               # reclaim slots from crashed runs
 # A FIXED shared path (not tempdir(), which is per-process) so the semaphore is
 # global even if Shiny Server runs the app as several R processes. Use a stable
@@ -253,8 +264,9 @@ VALIDATED_MODULES <- c(
 )
 
 # GROBID servers offered. GROBID on this server (a SURF Research Cloud
-# workspace with metacheck_grobid_url = local, which sets GROBID_LOCAL_URL) is
-# offered first, and preselected when there is no bibr.
+# workspace with metacheck_grobid_url = local, which sets GROBID_LOCAL_URL, or
+# the metacheck Docker image) is offered first, and preselected when there is
+# no bibr.
 GROBID_LOCAL_URL <- Sys.getenv("GROBID_LOCAL_URL")
 GROBID_SERVERS <- c(
   if (nzchar(GROBID_LOCAL_URL)) list(local_grobid = GROBID_LOCAL_URL),
@@ -443,6 +455,7 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     label    = if (identical(Sys.getenv("METACHECK_LLM_SHARED"), "true"))
       "The bibr server's model (SURF private network)"
       else if (nzchar(LLM_SERVER_NAME)) LLM_SERVER_NAME
+      else if (METACHECK_LOCAL) "Ollama on this computer (start Ollama first)"
       else "This server (local model)",
     # Through metacheck's OpenAI-compatible ("vllm") route to Ollama's /v1
     # address: only that route switches off Qwen's reasoning step for
@@ -461,11 +474,50 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
       "The model runs on ", LLM_SERVER_NAME, ", a server chosen by the ",
       "administrators of this server; the paragraphs are sent there to be analysed."
     ) else paste0(
-      "The model runs on this server, so the paragraphs are not sent to an ",
+      "The model runs on ", HERE, ", so the paragraphs are not sent to an ",
       "external provider."
     )
   )), LLM_PROVIDERS)
   LLM_DEFAULT_PROVIDER <- "local"
+}
+
+# On the user's own computer (the metacheck Docker image), the user's own API
+# keys are used, so only the providers set up when installing are offered
+# (Ollama, or a provider whose key is set), and the privacy notes say nothing
+# about this server's agreements with the providers. METACHECK_SETTINGS_FILE
+# names the file where a key can be added later.
+if (METACHECK_LOCAL) {
+  LLM_PROVIDERS <- Filter(function(p) nzchar(Sys.getenv(p$key_env)), LLM_PROVIDERS)
+  for (p in intersect(c("mistral", "groq"), names(LLM_PROVIDERS))) {
+    LLM_PROVIDERS[[p]]$privacy <- sub(" This deployment has opted out of model training[^.]*\\.", paste0(
+      " Whether your text may be used to train the provider's models depends on ",
+      "the settings of your own account with the provider."), LLM_PROVIDERS[[p]]$privacy)
+  }
+  LLM_DEFAULT_PROVIDER <- names(LLM_PROVIDERS)[1]   # NA when there is none
+}
+LLM_SETTINGS_FILE <- Sys.getenv("METACHECK_SETTINGS_FILE", "the file .env in Metacheck's folder")
+
+# On the user's own computer, Ollama is a program they start themselves, so
+# check that it answers and has the model before a report starts. Without
+# this, a stopped Ollama is reported as an unreachable PDF-conversion server
+# (explain_error() matches "connection refused"). Returns "" when all is well.
+ollama_problem <- function() {
+  url   <- Sys.getenv("OLLAMA_BASE_URL")
+  model <- Sys.getenv("METACHECK_LLM_MODEL")
+  tags <- tryCatch(
+    httr2::request(url) |> httr2::req_url_path_append("api", "tags") |>
+      httr2::req_timeout(3) |> httr2::req_perform() |> httr2::resp_body_json(),
+    error = function(e) NULL)
+  if (is.null(tags)) {
+    return(sprintf(paste0("Ollama could not be reached at %s. Start Ollama on ",
+      "this computer, or switch off the LLM power check in the Options tab."), url))
+  }
+  names <- vapply(tags$models, function(m) m$name %||% "", character(1))
+  if (!model %in% c(names, sub(":latest$", "", names))) {
+    return(sprintf(paste0("Ollama on this computer does not have the model %s. ",
+      "Download it with the command: ollama pull %s"), model, model))
+  }
+  ""
 }
 
 
@@ -499,7 +551,7 @@ report_tab <- tabItem(
     tags$b("View Report"), " button will appear — click it to open the report ",
     "in a new browser tab."
   ),
-  tags$div(class = "capacity-note capacity-warn",
+  if (!METACHECK_LOCAL) tags$div(class = "capacity-note capacity-warn",
     icon("triangle-exclamation"),
     tags$b(" Busy server? Please try again in a few minutes. "),
     "This is a shared research server with limited capacity. Each report takes ",
@@ -508,7 +560,7 @@ report_tab <- tabItem(
     "try again shortly — just wait a few minutes and upload again. Your request ",
     "is never lost silently. Thank you for your patience."
   ),
-  uiOutput("busy_banner"),
+  if (!METACHECK_LOCAL) uiOutput("busy_banner"),
   tags$div(class = "pdf-upload",
     fileInput("upload_pdf", NULL, multiple = FALSE, accept = ".pdf",
               width = "100%",
@@ -550,7 +602,8 @@ options_tab <- tabItem(
       choiceNames = c(
         if (nzchar(BIBR_URL)) list(BIBR_LABEL),
         if (nzchar(GROBID_LOCAL_URL))
-          list("Use GROBID on this server (the PDF is converted here)"),
+          list(if (METACHECK_LOCAL) "Use GROBID on this computer (the PDF does not leave your computer)"
+               else "Use GROBID on this server (the PDF is converted here)"),
         list(
           "Use GDPR compliant GROBID server at Eindhoven University of Technology",
           "Use Full GROBID via HuggingFace (USA)"
@@ -581,11 +634,23 @@ options_tab <- tabItem(
     tags$h4("Optional: LLM power check"),
     tags$p(
       "The power-analysis check can optionally use a large language model to ",
-      "check whether power analyses report all the required information. The ",
-      "LLM is provided for you — no API key needed; just pick a provider."
+      "check whether power analyses report all the required information. ",
+      if (METACHECK_LOCAL) {
+        "It uses the model that was set up when Metacheck was installed."
+      } else {
+        "The LLM is provided for you — no API key needed; just pick a provider."
+      }
     ),
-    checkboxInput("use_llm", tags$b("Use LLM power check"), value = FALSE),
-    conditionalPanel(
+    # On the user's own computer without a model set up: how to add one.
+    if (METACHECK_LOCAL && !length(LLM_PROVIDERS)) tags$p(class = "llm-key-panel",
+      "No language model is set up. To use one, add your Mistral API key to ",
+      tags$code(LLM_SETTINGS_FILE), " as a line ", tags$code("MISTRAL_API_KEY=..."),
+      " and start Metacheck again. You can get a key on ",
+      tags$a("Mistral's website", href = "https://console.mistral.ai/api-keys",
+             target = "_blank"), "."
+    ),
+    if (length(LLM_PROVIDERS)) checkboxInput("use_llm", tags$b("Use LLM power check"), value = FALSE),
+    if (length(LLM_PROVIDERS)) conditionalPanel(
       condition = "input.use_llm == true",
       tags$div(class = "llm-key-panel",
         radioButtons(
@@ -668,6 +733,7 @@ server <- function(input, output, session) {
 
   # The currently selected LLM provider definition (defaults to the default).
   llm_provider <- reactive({
+    if (!length(LLM_PROVIDERS)) return(NULL)   # none set up on the user's own computer
     p <- input$llm_provider %||% LLM_DEFAULT_PROVIDER
     LLM_PROVIDERS[[p]] %||% LLM_PROVIDERS[[LLM_DEFAULT_PROVIDER]]
   })
@@ -685,9 +751,11 @@ server <- function(input, output, session) {
         " This uses the ", tags$code(sub("^[^/]+/", "", prov$model)),
         " model on ", tags$b(prov$label), ".",
         if (identical(prov$region, "local")) {
-          " It runs on this server, so there is no cost to you."
+          paste0(" It runs on ", HERE, ", so there is no cost to you.")
         } else if (identical(prov$region, "server")) {
           " This server provides it, so there is no cost to you."
+        } else if (METACHECK_LOCAL) {
+          " It uses your own API key, so it counts towards your plan with the provider."
         } else {
           " The API key is provided by this server, so there is no cost to you."
         }
@@ -717,7 +785,8 @@ server <- function(input, output, session) {
       } else {
         "\U0001F512 The PDF file is converted on this server with bibr. Reference lists are looked up in CrossRef."
       },
-      "local_grobid" = "\U0001F512 The PDF file is converted on this server with GROBID; it is not sent to another server.",
+      "local_grobid" = paste0("\U0001F512 The PDF file is converted on ", HERE,
+                              " with GROBID; it is not sent to another server."),
       "metacheck"   = "\U0001F6E1️ The PDF file is converted using a GDPR compliant server at Eindhoven University of Technology.",
       "huggingface" = "\U0001F310 The PDF file is converted using an external server (HuggingFace, USA).",
       "The PDF file is converted using an external server."
@@ -739,8 +808,8 @@ server <- function(input, output, session) {
     }
 
     llm_use_text <- if (use_llm && identical(llm_provider()$region, "local")) {
-      sprintf("\U0001F512 An LLM is enabled on this server: model %s. Only the power-related paragraphs are used, and they are not sent to an external provider.",
-              sub("^[^/]+/", "", llm_provider()$model))
+      sprintf("\U0001F512 An LLM is enabled on %s: model %s. Only the power-related paragraphs are used, and they are not sent to an external provider.",
+              HERE, sub("^[^/]+/", "", llm_provider()$model))
     } else if (use_llm && identical(llm_provider()$region, "server")) {
       sprintf("\U0001F310 An LLM is enabled on %s: model %s. Only the power-related paragraphs are sent there.",
               llm_provider()$label, sub("^[^/]+/", "", llm_provider()$model))
@@ -752,8 +821,14 @@ server <- function(input, output, session) {
       } else {
         "Processed in the USA under Groq's Data Processing Addendum (SCC safeguards)."
       }
-      sprintf("%s An LLM is enabled via %s: model %s. Only the power-related paragraphs are sent. %s This deployment has opted out of model training, so your text is not used to train models.",
-              lock, prov$label, sub("^[^/]+/", "", prov$model), detail)
+      # with the user's own key (their own computer), training depends on their account
+      training <- if (METACHECK_LOCAL) {
+        "Whether your text may be used to train models depends on your own account with the provider."
+      } else {
+        "This deployment has opted out of model training, so your text is not used to train models."
+      }
+      sprintf("%s An LLM is enabled via %s: model %s. Only the power-related paragraphs are sent. %s %s",
+              lock, prov$label, sub("^[^/]+/", "", prov$model), detail, training)
     } else {
       "\U0001F512 No LLM is used (LLM power check is off)."
     }
@@ -835,6 +910,15 @@ server <- function(input, output, session) {
       cleanup()
       return(invisible())
     }
+    if (use_llm && METACHECK_LOCAL &&
+        identical(input$llm_provider %||% LLM_DEFAULT_PROVIDER, "local")) {
+      problem <- ollama_problem()
+      if (nzchar(problem)) {
+        report_error(problem)
+        cleanup()
+        return(invisible())
+      }
+    }
 
     use_crossref <- isTRUE(input$query_crossref)
     modules <- VALIDATED_MODULES
@@ -856,7 +940,7 @@ server <- function(input, output, session) {
       pdf_path = files$datapath, pdf_name = files$name, tmp = tmp,
       convert_args = CONVERTERS[[input$grobid_server_choice %||% DEFAULT_CONVERTER]],
       use_crossref = use_crossref, modules = modules,
-      use_llm = use_llm, llm_model = prov$model, htmlpath = htmlpath
+      use_llm = use_llm, llm_model = prov$model %||% "", htmlpath = htmlpath
     ))
     stop_watch <- bg_watch(job, session, "Generating report",
       heartbeat = slot, max_minutes = 30,

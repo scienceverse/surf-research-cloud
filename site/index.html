@@ -7,6 +7,7 @@
 <meta name="description" content="An Automated Tool to Check for Best Practices in Scientific Articles. Runs on SURF Research Cloud.">
 <link rel="icon" type="image/png" href="/site/images/logo.png">
 <link rel="stylesheet" href="/site/site.css">
+<script src="/site/local.js"></script>
 </head>
 <body>
 
@@ -17,7 +18,7 @@
 </header>
 
 <main>
-  <p class="intro">Metacheck screens scientific manuscripts to identify potential issues or areas for improvement and guide researchers in adopting best practices. It is a module based open source tool. For information on the available modules, see the <a href="https://www.scienceverse.org/metacheck_book/" target="_blank" rel="noopener">manual</a>. Upload a paper or a folder below and you will receive a report with automated checks within minutes. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, with an open source language model. This tool is GDPR compliant.</p>
+  <p class="intro">Metacheck screens scientific manuscripts to identify potential issues or areas for improvement and guide researchers in adopting best practices. It is a module based open source tool. For information on the available modules, see the <a href="https://www.scienceverse.org/metacheck_book/" target="_blank" rel="noopener">manual</a>. Upload a paper or a folder below and you will receive a report with automated checks within minutes. <span class="server-only">Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, with an open source language model. This tool is GDPR compliant.</span><span class="local-only">Everything runs on your own computer, in the Metacheck Docker installation<span data-when="grobid-local">, also the conversion of PDFs (by GROBID)</span><span data-when="grobid-remote">, except the conversion of PDFs: a PDF is sent to the GDPR compliant GROBID server of Eindhoven University of Technology</span>.<span data-when="llm-ollama"> The power check uses the language model in <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> on your computer.</span><span data-when="llm-mistral"> The power check sends the paragraphs about statistical power to Mistral (EU), with your own API key.</span></span></p>
 
   <!-- "two": two columns while the bibr convert tool (3, below) is switched
        off; remove the class when the tool is back. -->
@@ -37,7 +38,7 @@
         <div class="check-list"><p class="note">Loading the list of checks&hellip;</p></div>
       </details>
       <label class="crossref"><input type="checkbox" class="use-crossref"> Look up the references at Crossref <span class="note">(sends the paper's reference list to Crossref in the USA)</span></label>
-      <label class="crossref run-code-label"><input type="checkbox" class="run-code"> Also run the code in the paper's repository <span class="note run-code-note">(found through the links in the paper; the data and code are fetched, the R and Python code is run in a closed sandbox without internet access, and its results are compared with the paper; this can take several minutes)</span></label>
+      <label class="crossref run-code-label"><input type="checkbox" class="run-code"> Also run the code in the paper's repository <span class="note run-code-note"><span class="server-only">(found through the links in the paper; the data and code are fetched, the R and Python code is run in a closed sandbox without internet access, and its results are compared with the paper; this can take several minutes)</span><span class="local-only">(found through the links in the paper; the data and code are fetched, the R and Python code is run inside the Docker container, and its results are compared with the paper; this can take several minutes. The container is not a closed sandbox: the code can use the internet, but it cannot reach the files on your computer)</span></span></label>
       <button type="button" class="go" disabled>Make the report</button>
       <div class="status" hidden></div>
     </section>
@@ -58,7 +59,7 @@
         <input type="url" class="repo-url" placeholder="https://github.com/user/repo  or  https://osf.io/abcde" autocomplete="off">
       </label>
       <p class="note">For a link, the server fetches the public files itself (GitHub, OSF, Zenodo, Dataverse, Dryad, ...): files over 100 MB are skipped, and at most 500 MB is fetched.</p>
-      <label class="crossref run-code-label"><input type="checkbox" class="run-code" checked> Also run the R and Python code <span class="note run-code-note">(in a closed sandbox without internet access; this can take several minutes)</span></label>
+      <label class="crossref run-code-label"><input type="checkbox" class="run-code" checked> Also run the R and Python code <span class="note run-code-note"><span class="server-only">(in a closed sandbox without internet access; this can take several minutes)</span><span class="local-only">(inside the Docker container, which can use the internet but cannot reach the files on your computer; this can take several minutes)</span></span></label>
       <button type="button" class="go" disabled>Check the repository</button>
       <div class="status" hidden></div>
     </section>
@@ -84,10 +85,11 @@
 
   <section class="about">
     <h2>More checks</h2>
-    <p><a href="/researchbox/">ResearchBox Check</a>: the data and code in a ResearchBox. <a href="/datamanager/">TU/e Data Manager Check</a>: a data package against TU/e's archiving guidelines, as TU/e's data managers check it.</p>
+    <p><a href="/researchbox/">ResearchBox Check</a>: the data and code in a ResearchBox. <a href="/datamanager/">TU/e Data Manager Check</a>: a data package against TU/e's archiving guidelines, as TU/e's data managers check it.<span class="local-only"> <a href="/metacheck/">Metacheck app</a>: the paper report app, with the optional LLM power check.</span></p>
 
     <h2>What happens to your files</h2>
-    <p>Uploaded files are deleted as soon as they have been read. Reports are kept for one hour. A report can only be fetched with its random job number, which only your browser knows. Nothing is sent to external services, the tool is fully GDPR compliant.<span id="grobid-exception"> One exception: when the PDF converter on SURF Research Cloud (bibr) does not answer, a PDF is converted by the GROBID server of Eindhoven University of Technology instead, and the report says so.</span></p>
+    <p class="server-only">Uploaded files are deleted as soon as they have been read. Reports are kept for one hour. A report can only be fetched with its random job number, which only your browser knows. Nothing is sent to external services, the tool is fully GDPR compliant.<span id="grobid-exception"> One exception: when the PDF converter on SURF Research Cloud (bibr) does not answer, a PDF is converted by the GROBID server of Eindhoven University of Technology instead, and the report says so.</span></p>
+    <p class="local-only">Uploaded files go to the Docker container on your computer, are deleted as soon as they have been read, and the reports are kept in the container for one hour.<span data-when="grobid-remote"> A PDF is converted by the GDPR compliant GROBID server of Eindhoven University of Technology, so it is sent there.</span><span data-when="llm-mistral"> The power check sends the paragraphs about statistical power to Mistral (EU), with your own API key.</span> Checks that contact online services (Crossref, PubPeer, OSF, GitHub, ...) send only what they need to look up, such as DOIs, the reference list or repository links, and only when you choose those checks.</p>
 
     <h2>Use it from your own code</h2>
     <p>Every tool on this page is also a web interface you can call from R, Python, PowerShell or the command line, for example:</p>

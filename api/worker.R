@@ -53,9 +53,33 @@ CODE_REPORT_MINUTES <- 10
   start + (limit - CODE_REPORT_MINUTES) * 60
 }
 
+# TRUE in the metacheck Docker image (scienceverse/metacheck_platform_docker),
+# which runs this interface on the user's own computer.
+.local <- function() identical(tolower(Sys.getenv("METACHECK_LOCAL")), "true")
+
+# On the user's own computer, Ollama is a program they start themselves: TRUE
+# when it answers and has the model (as ollama_problem() in app/app.R).
+.ollama_ready <- function() {
+  tags <- tryCatch(
+    httr2::request(Sys.getenv("OLLAMA_BASE_URL")) |> httr2::req_url_path_append("api", "tags") |>
+      httr2::req_timeout(3) |> httr2::req_perform() |> httr2::resp_body_json(),
+    error = function(e) NULL)
+  names <- vapply(tags$models, function(m) m$name %||% "", character(1))
+  Sys.getenv("METACHECK_LLM_MODEL") %in% c(names, sub(":latest$", "", names))
+}
+
+# How the code of a repository is run: in the Docker sandbox of this server
+# (METACHECK_SANDBOX=on), or, in the metacheck Docker image
+# (METACHECK_SANDBOX=process), as a process inside that container, which is
+# then the boundary: metacheck's sandbox = "process".
+.code_sandbox <- function() {
+  if (identical(Sys.getenv("METACHECK_SANDBOX"), "process")) "process" else "docker"
+}
+
 .setup_llm <- function() {
   llm_cache(FALSE)
-  if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
+  if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) && nzchar(Sys.getenv("METACHECK_LLM_MODEL")) &&
+      (!.local() || .ollama_ready())) {
     options(metacheck.llm.vllm.base_url = paste0(Sys.getenv("OLLAMA_BASE_URL"), "/v1"))
     if (!nzchar(Sys.getenv("VLLM_API_KEY"))) Sys.setenv(VLLM_API_KEY = "ollama")
     llm_only_for_listed_modules(TRUE)
@@ -65,6 +89,16 @@ CODE_REPORT_MINUTES <- 10
     # (metacheck_llm_max_tokens)
     max_tokens <- suppressWarnings(as.integer(Sys.getenv("METACHECK_LLM_MAX_TOKENS")))
     if (!is.na(max_tokens) && max_tokens > 0) llm_max_tokens(max_tokens)
+  } else if (.local() && !nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
+             nzchar(Sys.getenv("MISTRAL_API_KEY"))) {
+    # On the user's own computer, without Ollama set up: Mistral with the
+    # user's own key, given when installing (the model the paper report app
+    # offers). Not when Ollama is set up but does not run, as the website then
+    # says the paragraphs stay on the computer. Only on the user's computer:
+    # on a server, a key in the environment is for the app alone.
+    llm_only_for_listed_modules(TRUE)
+    llm_model("mistral/mistral-medium-latest")
+    llm_max_calls(200L)
   } else {
     llm_only_for_listed_modules(FALSE)
   }
@@ -114,16 +148,25 @@ CODE_REPORT_MINUTES <- 10
     metacheck::convert(input, job_dir, method = "grobid", api_url = grobid,
                        keep_xml = FALSE, crossref_lookup = lookup)
   }
+  # On the user's own computer (the metacheck Docker installation, no bibr),
+  # GROBID is the only converter: say which GROBID failed and what to do.
+  grobid_failed <- function(detail = "") {
+    if (.local() && !nzchar(Sys.getenv("BIBR_API_URL"))) {
+      remote <- !identical(grobid, Sys.getenv("GROBID_LOCAL_URL"))
+      stop("The GROBID server at ", grobid, " could not convert the PDF", detail, ".",
+           if (remote) paste(" It may be unavailable for a while: try again later, or switch on",
+                             "GROBID on this computer (see the README of",
+                             "scienceverse/metacheck_platform_docker).")
+           else " If Metacheck has just started, wait a minute (GROBID starts more slowly) and try again.",
+           call. = FALSE)
+    }
+    stop(bibr_error, " The GROBID server could not convert it either", detail, ".", call. = FALSE)
+  }
   json <- tryCatch(
     if (crossref) tryCatch(grobid_convert(TRUE), error = function(e) grobid_convert(FALSE))
     else grobid_convert(FALSE),
-    error = function(e) {
-      stop(bibr_error, " The GROBID server could not convert it either (",
-           conditionMessage(e), ").", call. = FALSE)
-    })
-  if (length(json) != 1 || is.na(json) || !file.exists(json)) {
-    stop(bibr_error, " The GROBID server could not convert it either.", call. = FALSE)
-  }
+    error = function(e) grobid_failed(paste0(" (", conditionMessage(e), ")")))
+  if (length(json) != 1 || is.na(json) || !file.exists(json)) grobid_failed()
   list(json = json, converter = if (from_word) "word+grobid" else "grobid")
 }
 
@@ -268,6 +311,13 @@ do_repocheck <- function(job_dir, job) {
       # is cleared too.
       llm_cache(FALSE)
       llm_model(NULL)
+      if (.local()) {
+        # tue_datamanager_check converts documents with TU/e's GROBID, and with
+        # the SURF server when that fails; on the user's own computer, with
+        # the GROBID in the image only, so nothing leaves the computer
+        options(tdc.grobid_url = Sys.getenv("METACHECK_GROBID_URL"),
+                tdc.bibr_fallback = FALSE)
+      }
       m <- job$modules[[1]]
       # an unpacked .zip, or a link (checked by api.R: public addresses only),
       # whose files the module fetches itself (100 MB per file, 500 MB in all)
@@ -282,7 +332,7 @@ do_repocheck <- function(job_dir, job) {
         # for a repository check: in the Docker sandbox, installing missing
         # CRAN and PyPI packages first, at most 5 minutes per script (see below)
         margs$run_code <- TRUE
-        margs$run_args <- list(sandbox = "docker", install_missing = TRUE,
+        margs$run_args <- list(sandbox = .code_sandbox(), install_missing = TRUE,
                                docker_use_declared_version = FALSE, timeout = 300)
         deadline <- .code_deadline(job_dir)
         if (!is.null(deadline)) margs$run_args$total_timeout <- deadline
@@ -312,7 +362,7 @@ do_repocheck <- function(job_dir, job) {
       modules <- c(modules, "reproducibility_check")
       labels <- c(labels, reproducibility_check = "Running the R and Python code in the sandbox")
       args$reproducibility_check <- c(list(
-        execute = TRUE, sandbox = "docker", install_missing = TRUE,
+        execute = TRUE, sandbox = .code_sandbox(), install_missing = TRUE,
         docker_use_declared_version = FALSE, timeout = 300), code_place)
       deadline <- .code_deadline(job_dir)
       if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
@@ -354,7 +404,7 @@ do_repocheck <- function(job_dir, job) {
   args <- list(
     code_check = fetch, data_check = fetch,
     reproducibility_check = c(list(
-      execute = TRUE, sandbox = "docker", install_missing = TRUE,
+      execute = TRUE, sandbox = .code_sandbox(), install_missing = TRUE,
       docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
   deadline <- .code_deadline(job_dir)
   if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
