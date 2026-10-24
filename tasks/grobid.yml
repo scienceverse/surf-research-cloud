@@ -4,7 +4,9 @@
 # report app ("Use GROBID on this server"). GROBID's image without deep
 # learning models (CRF only, about 0.5 GB) needs no GPU. It runs in Docker as
 # the service metacheck-grobid, reachable only from this workspace
-# (127.0.0.1:8070), with at most 4G of memory (Java may use 75% of it).
+# (127.0.0.1:8070), with at most 6G of memory. Java may use half of it for its
+# data; the rest is for what Java needs besides that. With 4G and 75% (October
+# 2026), a 4.2G GROBID was stopped by the kernel while converting a long paper.
 #
 # Expects: metacheck_grobid_image. Needs Docker, which tasks/sandbox.yml
 # installs (metacheck_run_code = true).
@@ -48,8 +50,8 @@
           [Service]
           ExecStartPre=-/usr/bin/docker rm -f metacheck-grobid
           ExecStart=/usr/bin/docker run --rm --name metacheck-grobid --init --pull never \
-            -p 127.0.0.1:8070:8070 --memory 4g --memory-swap 4g --ulimit core=0 \
-            -e JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75 {{ metacheck_grobid_image }}
+            -p 127.0.0.1:8070:8070 --memory 6g --memory-swap 6g --ulimit core=0 \
+            -e JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=50 {{ metacheck_grobid_image }}
           ExecStop=/usr/bin/docker stop --time 10 metacheck-grobid
           Restart=always
           RestartSec=10

@@ -398,7 +398,8 @@ metacheck_llm=ollama-cpu
   the image without deep learning models (`metacheck_grobid_image`,
   `grobid/grobid:0.9.1-crf`, about 0.5 GB), in Docker as the service
   `metacheck-grobid`, reachable only from the workspace (`127.0.0.1:8070`), with
-  at most 4 GB of memory. The web interface converts every PDF with it (and says so
+  at most 6 GB of memory, half of it for Java's data (with 4 GB and three quarters, a long paper
+  made it run out of memory). The web interface converts every PDF with it (and says so
   in the report), and the paper report app offers it first ("Use GROBID on this
   server"). GROBID reads PDFs only, not Word files, and its conversion is less
   complete than bibr's. It needs Docker, which the playbook installs for the
@@ -408,9 +409,9 @@ metacheck_llm=ollama-cpu
   so the website and code runs keep theirs. On a 2-core workspace (October 2026),
   the power check of a text with three power analyses took 36 to 51 s and found
   all three; the model keeps about 4.3 GB of memory.
-- `auto` sandbox memory keeps 4 GB more for GROBID and 4.5 GB more for the model.
-  On `4 Core - 32 GB RAM` with one job at a time, a code run then gets 16 GB; on
-  `2 Core- 16 GB RAM` about 3 GB.
+- `auto` sandbox memory keeps 6 GB more for GROBID and 4.5 GB more for the model.
+  On `4 Core - 32 GB RAM` a code run then gets 16 GB with one job at a time and
+  about 8 GB with two; on `2 Core- 16 GB RAM` only 1 GB, too little for most code.
 
 ## Which checks use the language model
 
