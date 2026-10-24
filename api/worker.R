@@ -162,12 +162,31 @@ CODE_REPORT_MINUTES <- 10
     }
     stop(bibr_error, " The GROBID server could not convert it either", detail, ".", call. = FALSE)
   }
+  grobid_error <- NULL
   json <- tryCatch(
     if (crossref) tryCatch(grobid_convert(TRUE), error = function(e) grobid_convert(FALSE))
     else grobid_convert(FALSE),
-    error = function(e) grobid_failed(paste0(" (", conditionMessage(e), ")")))
-  if (length(json) != 1 || is.na(json) || !file.exists(json)) grobid_failed()
-  list(json = json, converter = if (from_word) "word+grobid" else "grobid")
+    error = function(e) { grobid_error <<- paste0(" (", conditionMessage(e), ")"); NULL })
+  if (length(json) == 1 && !is.na(json) && file.exists(json)) {
+    return(list(json = json, converter = if (from_word) "word+grobid" else "grobid"))
+  }
+  # The backup when an external GROBID fails (METACHECK_CONVERT_BACKUP=surf,
+  # set by the metacheck Docker installation): metacheck's server on SURF
+  # Research Cloud, through metacheck's own convert_bibr(). Not when the
+  # GROBID is the installation's own, which the user chose to keep PDFs on
+  # their computer.
+  if (identical(Sys.getenv("METACHECK_CONVERT_BACKUP"), "surf") && !from_word &&
+      !identical(grobid, Sys.getenv("GROBID_LOCAL_URL"))) {
+    .set_status(job_dir, step = "converting the PDF on metacheck's server on SURF Research Cloud (the GROBID server did not answer)")
+    json <- tryCatch(metacheck::convert_bibr(input, job_dir, backend = "surf"),
+                     error = function(e) { grobid_error <<- paste0(grobid_error,
+                       "; metacheck's server on SURF Research Cloud could not convert it either (",
+                       conditionMessage(e), ")"); NULL })
+    if (length(json) == 1 && !is.na(json) && file.exists(json)) {
+      return(list(json = json, converter = "surf"))
+    }
+  }
+  grobid_failed(grobid_error %||% "")
 }
 
 # A Word file as a PDF, made by LibreOffice on this server (Gotenberg's
@@ -203,6 +222,9 @@ CODE_REPORT_MINUTES <- 10
   } else if (identical(converter, "grobid")) {
     paste("The PDF was converted by a GROBID server, because bibr could not convert it.",
           "GROBID's conversion is less complete than bibr's, so some checks may find less.")
+  } else if (identical(converter, "surf")) {
+    paste("The PDF was converted by metacheck's server on SURF Research Cloud (the Netherlands),",
+          "because the GROBID server at", Sys.getenv("METACHECK_GROBID_URL"), "could not convert it.")
   } else {
     "The PDF was converted by bibr."
   }
@@ -313,10 +335,14 @@ do_repocheck <- function(job_dir, job) {
       llm_model(NULL)
       if (.local()) {
         # tue_datamanager_check converts documents with TU/e's GROBID, and with
-        # the SURF server when that fails; on the user's own computer, with
-        # the GROBID in the image only, so nothing leaves the computer
-        options(tdc.grobid_url = Sys.getenv("METACHECK_GROBID_URL"),
-                tdc.bibr_fallback = FALSE)
+        # the SURF server when that fails. On the user's own computer, with
+        # the installation's GROBID; the SURF server only with an external
+        # GROBID and the SURF backup set (METACHECK_CONVERT_BACKUP=surf), so
+        # nothing leaves the computer when the user chose their own GROBID.
+        grobid <- Sys.getenv("METACHECK_GROBID_URL")
+        options(tdc.grobid_url = grobid,
+                tdc.bibr_fallback = identical(Sys.getenv("METACHECK_CONVERT_BACKUP"), "surf") &&
+                  !identical(grobid, Sys.getenv("GROBID_LOCAL_URL")))
       }
       m <- job$modules[[1]]
       # an unpacked .zip, or a link (checked by api.R: public addresses only),
