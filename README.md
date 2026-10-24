@@ -405,6 +405,7 @@ GPU and without bibr:
 ```
 metacheck_bibr_url=none
 metacheck_grobid_url=local
+metacheck_docx_converter=local
 metacheck_llm=ollama-cpu
 ```
 
@@ -418,14 +419,23 @@ metacheck_llm=ollama-cpu
   server"). GROBID reads PDFs only, not Word files, and its conversion is less
   complete than bibr's. It needs Docker, which the playbook installs for the
   sandbox (`metacheck_run_code`).
+- `metacheck_docx_converter = local` runs LibreOffice on the workspace
+  (`tasks/docx.yml`): Gotenberg's image with LibreOffice only
+  (`metacheck_docx_image`, `gotenberg/gotenberg:8.38.1-libreoffice`, about 0.45 GB),
+  in Docker as the service `metacheck-docx`, reachable only from the workspace
+  (`127.0.0.1:3000`), with at most 2 GB of memory. Without bibr, the web interface
+  sends it a Word file (`.docx`, about a quarter of PsyArXiv's preprints), gives the
+  PDF it returns to GROBID, and says so at the top of the report (`converter`:
+  `word+grobid`). It also needs Docker.
 - `metacheck_llm = ollama-cpu` runs Ollama with `metacheck_llm_model` on the
   processors, with half the processor weight of other programs (`CPUWeight=50`),
   so the website and code runs keep theirs. On a 2-core workspace (October 2026),
   the power check of a text with three power analyses took 36 to 51 s and found
   all three; the model keeps about 4.3 GB of memory.
-- `auto` sandbox memory keeps 6 GB more for GROBID and 4.5 GB more for the model.
-  On `4 Core - 32 GB RAM` a code run then gets 16 GB with one job at a time and
-  about 8 GB with two; on `2 Core- 16 GB RAM` only 1 GB, too little for most code.
+- `auto` sandbox memory keeps 6 GB more for GROBID, 2 GB more for LibreOffice and 4.5 GB more for the model.
+  On `4 Core - 32 GB RAM` with all three, a code run then gets about 14.7 GB with
+  one job at a time and about 7.2 GB with two; on `2 Core- 16 GB RAM` only 1 GB, too
+  little for most code.
 
 ## Which checks use the language model
 
@@ -787,6 +797,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_modules` | `Lakens/tue_datamanager_check` | modules to install from GitHub (`owner/repo`, separated by commas or spaces; `none` = none), with `metacheck::module_install()` into `/opt/metacheck-component/modules` (`METACHECK_MODULES_DIR`); each set-up updates them to the newest commit. Needs metacheck 0.4.0.4 or later; a module that cannot be installed is reported and skipped (see "Installed modules") |
 | `metacheck_bibr_url` | `auto` | `auto` = the bibr on this workspace, if any; `none` = no bibr; or an address such as `http://10.10.10.12:8000` |
 | `metacheck_bibr_api_key` | `none` | bibr's token; required with an address |
+| `metacheck_docx_converter` | `none` | `local` = LibreOffice on this workspace makes a PDF of a Word file for GROBID when there is no bibr (see "A workspace without bibr"); `none` = Word files need bibr |
 | `metacheck_grobid_url` | `https://grobid.hti.ieis.tue.nl` | the GROBID server the web interface converts a PDF with when bibr fails or there is none; `local` = GROBID on this workspace (see "A workspace without bibr"); `none` = no fallback |
 | `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU, otherwise the bibr workspace's; `bibr` = always the bibr workspace's; `ollama-cpu` = a local model on the processors, without a GPU (see "A workspace without bibr"); `url` = another server's (see "A model on another server"); `none` = no model |
 | `metacheck_llm_model` | `qwen3.5:4b` | Ollama model tag; on a workspace of its own, a larger model fits; with `url`, the name the other server gives the model |

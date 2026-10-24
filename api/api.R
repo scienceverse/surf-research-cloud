@@ -552,7 +552,8 @@ later::later(.scheduler, 1)
     position = if (identical(st$status, "queued")) .position(id) else NULL,
     progress = progress,
     run_code = if (isTRUE(.read_job(id)$run_code)) TRUE else NULL,
-    # what converted the PDF: "bibr", or "grobid" when bibr failed (worker.R)
+    # what converted the PDF: "bibr", or "grobid" when bibr failed, or
+    # "word+grobid" for a Word file made into a PDF by LibreOffice (worker.R)
     converter = st$converter,
     created = st$created, started = st$started, finished = st$finished,
     error = st$error,

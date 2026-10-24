@@ -39,6 +39,11 @@ if (nzchar(grobid) && !answers(paste0(grobid, "/api/isalive"),
   problems <- c(problems, grobid = paste("GROBID does not answer", paste0("(", grobid, ")."),
                                          if (!nzchar(bibr)) "PDFs cannot be converted." else ""))
 }
+docx <- Sys.getenv("METACHECK_DOCX_URL")
+if (nzchar(docx) && !answers(paste0(docx, "/health"))) {
+  problems <- c(problems, docx = paste("LibreOffice (for Word files) does not answer",
+                                       paste0("(", docx, ")."), "Word files cannot be converted."))
+}
 llm <- Sys.getenv("OLLAMA_BASE_URL")
 if (nzchar(llm) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
   key <- Sys.getenv("VLLM_API_KEY")

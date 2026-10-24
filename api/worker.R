@@ -73,8 +73,10 @@ CODE_REPORT_MINUTES <- 10
 # The PDF (or .docx) as bibr JSON: from bibr, or, when bibr fails, from the
 # GROBID server in METACHECK_GROBID_URL (metacheck_grobid_url; TU/e's by
 # default), through metacheck's own convert(). GROBID reads PDFs only and
-# gives a less complete conversion, so the job records which one was used.
-# Returns list(json = <path>, converter = "bibr" | "grobid").
+# gives a less complete conversion, so the job records which one was used. A
+# Word file is first made into a PDF by LibreOffice on this server
+# (METACHECK_DOCX_URL; metacheck_docx_converter = local), when there is one.
+# Returns list(json = <path>, converter = "bibr" | "grobid" | "word+grobid").
 .convert_paper <- function(input, job_dir, ext, crossref, file_name) {
   bibr_error <- NULL
   if (!nzchar(Sys.getenv("BIBR_API_URL"))) {
@@ -90,8 +92,16 @@ CODE_REPORT_MINUTES <- 10
   }
   grobid <- Sys.getenv("METACHECK_GROBID_URL")
   if (!nzchar(grobid)) stop(bibr_error, call. = FALSE)
-  if (ext != ".pdf") {
-    stop(bibr_error, " GROBID reads only PDF files, and this is a Word file.", call. = FALSE)
+  from_word <- ext != ".pdf"
+  if (from_word) {
+    docx <- Sys.getenv("METACHECK_DOCX_URL")
+    if (!nzchar(docx)) {
+      stop(bibr_error, " GROBID reads only PDF files, and this is a Word file.", call. = FALSE)
+    }
+    .set_status(job_dir, step = "converting the Word file to PDF with LibreOffice")
+    input <- tryCatch(.word_to_pdf(input, docx, job_dir),
+                      error = function(e) stop(bibr_error, " ", conditionMessage(e), call. = FALSE))
+    on.exit(unlink(input), add = TRUE)
   }
   .set_status(job_dir, step = paste0(
     "converting the PDF with GROBID",
@@ -114,13 +124,37 @@ CODE_REPORT_MINUTES <- 10
   if (length(json) != 1 || is.na(json) || !file.exists(json)) {
     stop(bibr_error, " The GROBID server could not convert it either.", call. = FALSE)
   }
-  list(json = json, converter = "grobid")
+  list(json = json, converter = if (from_word) "word+grobid" else "grobid")
+}
+
+# A Word file as a PDF, made by LibreOffice on this server (Gotenberg's
+# /forms/libreoffice/convert, at METACHECK_DOCX_URL); returns the PDF's path.
+.word_to_pdf <- function(input, docx_url, job_dir) {
+  pdf <- file.path(job_dir, "input-from-word.pdf")
+  resp <- tryCatch(
+    httr2::request(paste0(sub("/+$", "", docx_url), "/forms/libreoffice/convert")) |>
+      httr2::req_body_multipart(files = curl::form_file(input)) |>
+      httr2::req_timeout(300) |>
+      httr2::req_error(is_error = function(r) FALSE) |>
+      httr2::req_perform(path = pdf),
+    error = function(e) {
+      stop("LibreOffice could not make a PDF of the Word file (", conditionMessage(e), ").", call. = FALSE)
+    })
+  if (httr2::resp_status(resp) != 200 || !identical(readBin(pdf, "raw", 4), charToRaw("%PDF"))) {
+    unlink(pdf)
+    stop("LibreOffice could not make a PDF of the Word file (HTTP ", httr2::resp_status(resp), ").",
+         call. = FALSE)
+  }
+  pdf
 }
 
 # A line at the top of an HTML report saying what converted the PDF.
 .add_converter_note <- function(html, converter) {
   if (is.null(converter) || !nzchar(html)) return(html)
-  note <- if (identical(converter, "grobid") && !nzchar(Sys.getenv("BIBR_API_URL"))) {
+  note <- if (identical(converter, "word+grobid")) {
+    paste("The Word file was made into a PDF by LibreOffice, and the PDF was converted by GROBID.",
+          "GROBID's conversion is less complete than bibr's, so some checks may find less.")
+  } else if (identical(converter, "grobid") && !nzchar(Sys.getenv("BIBR_API_URL"))) {
     paste("The PDF was converted by GROBID.",
           "GROBID's conversion is less complete than bibr's, so some checks may find less.")
   } else if (identical(converter, "grobid")) {
@@ -131,7 +165,7 @@ CODE_REPORT_MINUTES <- 10
   }
   div <- paste0('<div class="metacheck-converter" style="margin:8px auto;max-width:1200px;',
                 'padding:6px 12px;font-size:0.9em;border-left:4px solid ',
-                if (identical(converter, "grobid")) "#c77700" else "#999", ';">', note, '</div>')
+                if (converter %in% c("grobid", "word+grobid")) "#c77700" else "#999", ';">', note, '</div>')
   sub("(<body[^>]*>)", paste0("\\1", div), html)
 }
 
