@@ -733,13 +733,13 @@
     # Docker refuses a container that asks for more processors than the
     # workspace has, so the processors are never more than that. "auto"
     # memory leaves 4G for the rest (web interface, app, jobs' R processes,
-    # Docker), plus 4G for a local GROBID (its container's limit) and 4.5G
+    # Docker), plus 6G for a local GROBID (its container's limit) and 4.5G
     # for a model on the processors (ollama-cpu keeps about 4.3G loaded), and
     # is a multiple of 256M, at least 1G.
     - name: Decide what one job's code may use in the sandbox
       ansible.builtin.set_fact:
         metacheck_sandbox_cpus_value: "{{ [(4 if metacheck_sandbox_cpus == 'auto' else metacheck_sandbox_cpus | float), workspace_size.stdout.split()[0] | int] | min }}"
-        metacheck_sandbox_reserve_mb: "{{ 4096 + (4096 if metacheck_grobid_local | bool else 0) + (4608 if metacheck_cpu_llm | bool else 0) }}"
+        metacheck_sandbox_reserve_mb: "{{ 4096 + (6144 if metacheck_grobid_local | bool else 0) + (4608 if metacheck_cpu_llm | bool else 0) }}"
 
     - name: Decide how much memory one job's code may use in the sandbox
       ansible.builtin.set_fact:
