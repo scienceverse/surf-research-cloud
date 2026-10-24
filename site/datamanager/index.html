@@ -8,6 +8,7 @@
 <link rel="icon" type="image/png" href="www/images/logo.png">
 <link rel="stylesheet" href="www/site.css">
 <link rel="stylesheet" href="www/tdc.css">
+<script src="/site/local.js"></script>
 </head>
 <body>
 
@@ -21,7 +22,7 @@
 </header>
 
 <main>
-  <p class="intro">This website is made for TU/e data managers to easily compare a data and code package against the <a href="https://cockpit.research.tue.nl/helpcenter/research/portal/7/article/2813460512" target="_blank" rel="noopener">archiving guidelines</a> for RAPS (Research Archival Package Solution). Upload a paper or a folder below and you will receive a report with automated checks within minutes. Everything runs on <a href="https://www.surf.nl/en/services/compute/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, and relies on an open source language model to generate an adjusted README. This tool is GDPR compliant.</p>
+  <p class="intro">This website is made for TU/e data managers to easily compare a data and code package against the <a href="https://cockpit.research.tue.nl/helpcenter/research/portal/7/article/2813460512" target="_blank" rel="noopener">archiving guidelines</a> for RAPS (Research Archival Package Solution). Upload a paper or a folder below and you will receive a report with automated checks within minutes. <span class="server-only">Everything runs on <a href="https://www.surf.nl/en/services/compute/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands, and relies on an open source language model to generate an adjusted README. This tool is GDPR compliant.</span><span class="local-only">Everything runs on your own computer, in the Metacheck Docker image.</span></p>
 
   <div class="columns single">
 
@@ -46,7 +47,7 @@
         <label class="crossref"><input type="radio" name="people" value="true"> Yes</label>
         <label class="crossref"><input type="radio" name="people" value="false"> No <span class="note">(personal data found in the data still counts as yes)</span></label>
       </fieldset>
-      <label class="crossref"><input type="checkbox" class="run-code" checked> Run the R and Python code <span class="note">(in a closed sandbox on the server, at most 5 minutes per script)</span></label>
+      <label class="crossref"><input type="checkbox" class="run-code" checked> Run the R and Python code <span class="note"><span class="server-only">(in a closed sandbox on the server, at most 5 minutes per script)</span><span class="local-only">(inside the Docker container, which can use the internet but cannot reach the files on your computer; at most 5 minutes per script)</span></span></label>
       <button type="button" class="go" disabled>Check the data package</button>
       <div class="status" hidden></div>
       <p class="note server-note"></p>
@@ -56,7 +57,8 @@
 
   <section class="about">
     <h2>What happens to your files</h2>
-    <p>The package goes to the metacheck server on SURF Research Cloud and nowhere else, with one exception: to decide whether people took part, up to 3 of the package's scientific documents (such as the manuscript) may be converted to text by TU/e's GROBID server. The uploaded package is deleted as soon as the check has read it, and the report is kept for one hour. A report can only be fetched with its random job number, which only your browser knows.</p>
+    <p class="server-only">The package goes to the metacheck server on SURF Research Cloud and nowhere else, with one exception: to decide whether people took part, up to 3 of the package's scientific documents (such as the manuscript) may be converted to text by TU/e's GROBID server. The uploaded package is deleted as soon as the check has read it, and the report is kept for one hour. A report can only be fetched with its random job number, which only your browser knows.</p>
+    <p class="local-only">The package is uploaded to the Docker container on your computer.<span data-when="grobid-local"> Its scientific documents are converted by the GROBID server of the Docker installation, so the package stays on your computer.</span><span data-when="grobid-remote"> To decide whether people took part, up to 3 of its scientific documents (such as the manuscript) may be converted to text by the GDPR compliant GROBID server of Eindhoven University of Technology.</span> The uploaded package is deleted as soon as the check has read it, and the report is kept in the container for one hour.</p>
 
     <h2>About the check</h2>
     <p>The checks follow TU/e's archiving guidelines in Research Cockpit and the RDLC document "Using Metacheck for data package review and paper analysis". Every decision behind them is described in the <a href="https://github.com/Lakens/tue_datamanager_check" target="_blank" rel="noopener">tue_datamanager_check repository</a>, where you can also run the check on your own computer.</p>

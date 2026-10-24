@@ -8,6 +8,7 @@
 <link rel="icon" type="image/png" href="/site/images/logo.png">
 <link rel="stylesheet" href="/site/site.css">
 <link rel="stylesheet" href="/site/check-pages.css">
+<script src="/site/local.js"></script>
 </head>
 <body>
 
@@ -18,7 +19,7 @@
 </header>
 
 <main>
-  <p class="intro">Paste the link to a box on <a href="https://researchbox.org" target="_blank" rel="noopener">ResearchBox</a> and receive a checklist of what to fix and what to improve in its data and code: whether the files can be found and opened, whether the code loads files that are in the box, uses absolute paths or records its package versions, and whether the data columns are described in a codebook. The R and Python code can also be run, in a closed sandbox. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands.</p>
+  <p class="intro">Paste the link to a box on <a href="https://researchbox.org" target="_blank" rel="noopener">ResearchBox</a> and receive a checklist of what to fix and what to improve in its data and code: whether the files can be found and opened, whether the code loads files that are in the box, uses absolute paths or records its package versions, and whether the data columns are described in a codebook. <span class="server-only">The R and Python code can also be run, in a closed sandbox. Everything runs on <a href="https://www.surf.nl/en/services/surf-research-cloud" target="_blank" rel="noopener">SURF Research Cloud</a> in the Netherlands.</span><span class="local-only">The R and Python code can also be run, inside the Docker container. Everything runs on your own computer, in the Metacheck Docker image.</span></p>
 
   <div class="columns single">
     <section class="tool" id="tool-researchbox">
@@ -28,7 +29,7 @@
         <input type="url" class="repo-url" placeholder="https://researchbox.org/1150" autocomplete="off">
       </label>
       <p class="note">For example https://researchbox.org/1150. The server fetches the box's public files itself: files over 100 MB are skipped, and at most 500 MB is fetched.</p>
-      <label class="crossref"><input type="checkbox" class="run-code" checked> Run the R and Python code <span class="note">(in a closed sandbox on the server, at most 5 minutes per script)</span></label>
+      <label class="crossref"><input type="checkbox" class="run-code" checked> Run the R and Python code <span class="note"><span class="server-only">(in a closed sandbox on the server, at most 5 minutes per script)</span><span class="local-only">(inside the Docker container, which can use the internet but cannot reach the files on your computer; at most 5 minutes per script)</span></span></label>
       <button type="button" class="go" disabled>Check the box</button>
       <div class="status" hidden></div>
       <p class="note server-note"></p>
