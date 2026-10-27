@@ -289,6 +289,8 @@ function setupPaperTool(section, kind) {
       const mods = [...section.querySelectorAll(".check-list input:checked")].map(i => i.value);
       if (!mods.length) { statusArea(section).error("Choose at least one check."); return; }
       fields.modules = mods.join(",");
+      // metacheck's checklist report: every check sorted by its result
+      fields.report_type = "checklist";
     }
     const file = chosen;
     start(section, async () => ({ file, filename: file.name, name: baseName(file.name) }), kind, fields);
@@ -475,7 +477,8 @@ function setupFolderTool(section) {
   button.addEventListener("click", () => {
     if (!chosen) return;
     const c = chosen;
-    const fields = { run_code: section.querySelector(".run-code").checked ? "true" : "false" };
+    const fields = { run_code: section.querySelector(".run-code").checked ? "true" : "false",
+                     report_type: "checklist" };   // with the file tree (metacheck 0.4.1.9)
     if (c.url) fields.url = c.url;
     start(section, async ui => {
       if (c.url) {

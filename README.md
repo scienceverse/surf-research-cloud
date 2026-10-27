@@ -129,6 +129,13 @@ page, in three columns, for the three things the web interface below does:
    uploading.
 3. **Convert a Paper with bibr**: a PDF in, bibr's JSON out.
 
+Columns 1 and 2 ask for metacheck's checklist report (`report_type=checklist`):
+every check sorted by its result, to fix, to improve, and so on, and for a repository
+also its file tree, under "Files in the repository" (metacheck 0.4.1.9 and later;
+earlier versions leave the tree out). Scripts that call the web interface without
+`report_type` still get the full report of a paper and the brief report of a
+repository.
+
 Columns 1 and 3 have an unticked box "Look up the references at Crossref". Only when
 it is ticked does bibr complete the reference list through Crossref, which sends the
 paper's reference list to Crossref; with the default settings nothing leaves the
