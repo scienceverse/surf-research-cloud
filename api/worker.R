@@ -606,9 +606,25 @@ do_job <- function(job_dir) {
       full <- .run_paper_code(paper, modules, job_dir)
       modules <- character(0)          # all ran in the chain above
     }
+    if (length(modules)) {
+      # metacheck's progress messages go to progress.txt, which api.R shows as
+      # the step, as in .run_paper_code(): the bar ticks before and after each
+      # module (as report_module_run() does), so a module's own progress, such
+      # as the power check's language-model calls ("Extracting data (...)
+      # 1/2"), shows under its title and number
+      rc <- .repocheck_env()
+      options(shiny_progress_file = file.path(job_dir, "progress.txt"))
+      labels <- vapply(modules, function(m) {
+        tryCatch(metacheck::module_info(m)$title, error = function(e) m) %||% m
+      }, character(1))
+      rc$use_shiny_progress()
+      rc$shiny_progress_modules(stats::setNames(labels, modules), from = 0.1, to = 0.9)
+      bar <- rc$shiny_pb(length(modules), ":what")
+    }
     for (i in seq_along(modules)) {
       m <- modules[[i]]
       .set_status(job_dir, step = sprintf("running module %d of %d: %s", i, length(modules), m))
+      bar$tick(0, tokens = list(what = m))
       full[[m]] <- tryCatch(module_run(paper, m), error = function(e) {
         structure(list(module = m, title = m, table = NULL, summary_table = NULL,
                        summary_text = "Error running module",
@@ -616,6 +632,7 @@ do_job <- function(job_dir) {
                        traffic_light = "fail", section = "general"),
                   class = "metacheck_module_output")
       })
+      bar$tick(1, tokens = list(what = m))
     }
 
     # 4. the result
@@ -647,6 +664,7 @@ do_job <- function(job_dir) {
                  file.path(job_dir, "result.json"), useBytes = TRUE)
       type <- "application/json"
     }
+    unlink(file.path(job_dir, "progress.txt"))
     .set_status(job_dir, status = "done", step = "done", finished = .now(), result_type = type)
   }, error = function(e) {
     unlink(list.files(job_dir, pattern = "^input[.]", full.names = TRUE))
