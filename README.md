@@ -143,7 +143,12 @@ workspace. (The checks that can be ticked in column 1, such as Reference Accurac
 and PubPeer Comments, contact their own services.)
 
 While a job runs the page shows the upload, the place in the queue and each step;
-the report then opens in a new tab or can be downloaded. The page is static files
+the report then opens in a new tab or can be downloaded. For a paper, each check is
+shown with its number ("Power Analysis Check (step 1 of 7)") and the bar moves on
+after each; the power check also counts its questions to the language model, one
+per paragraph that may describe a power analysis ("Extracting data (...) 1/2"),
+since on a workspace without a GPU each takes a while. The other checks take about
+a second each, so the page, which asks every 2 seconds, mostly skips them. The page is static files
 served by nginx (`location /site/`; the root is passed to it by `00-root.conf`) and
 needs nothing on the server beyond the web interface. The font is
 [Cabin](https://github.com/impallari/Cabin), a humanist sans serif (SIL Open Font
