@@ -21,6 +21,8 @@ source(file.path("metacheck-plumber", "utils", "helpers.R"))
 source("bibr_client.R")
 # only the checks in LLM_MODULES (the power check) use the model
 source("llm_modules.R")
+# models tried before this server's own (metacheck_llm_first_*)
+source("llm_first.R")
 
 .now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
 
@@ -89,6 +91,9 @@ CODE_REPORT_MINUTES <- 10
     # (metacheck_llm_max_tokens)
     max_tokens <- suppressWarnings(as.integer(Sys.getenv("METACHECK_LLM_MAX_TOKENS")))
     if (!is.na(max_tokens) && max_tokens > 0) llm_max_tokens(max_tokens)
+    # the power check tries the models of metacheck_llm_first_models first,
+    # with this model as the fallback (llm_first.R)
+    llm_first_wrap("web")
   } else if (.local() && !nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
              nzchar(Sys.getenv("MISTRAL_API_KEY"))) {
     # On the user's own computer, without Ollama set up: Mistral with the

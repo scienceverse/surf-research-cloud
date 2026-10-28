@@ -16,6 +16,9 @@
 ##     pull request #496, made the "ollama" route fail). With METACHECK_LLM_NAME
 ##     the model is on another server, which the app names instead, and
 ##     METACHECK_LLM_MAX_TOKENS sets the longest answer.
+##   * METACHECK_LLM_FIRST_URL / _MODELS / _KEY / _NAME: with that model, the
+##     power check first tries these models on another server (such as TU/e's
+##     SPIKE-1), and falls back to that model (llm_first.R).
 ##   * GROBID_LOCAL_URL / METACHECK_LOCAL: set by the metacheck Docker image
 ##     (scienceverse/metacheck_platform_docker), which runs this app on the
 ##     user's own computer: the GROBID in that image is offered first, and
@@ -322,6 +325,7 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
   source("render_report.R")
   source("shiny_progress.R")
   source("llm_modules.R")
+  source("llm_first.R")
   use_shiny_progress()
 
   # This process's own LLM setting; the API keys come from the app's process
@@ -344,6 +348,9 @@ paper_job <- function(pdf_path, tmp, convert_args, use_crossref, modules,
     if (!is.na(max_tokens) && max_tokens > 0) metacheck::llm_max_tokens(max_tokens)
   }
   if (use_llm) metacheck::llm_model(llm_model)
+  # with this server's model, the power check tries the models of
+  # metacheck_llm_first_models first, with this one as the fallback (llm_first.R)
+  if (use_llm && startsWith(llm_model, "vllm/")) llm_first_wrap("app")
 
   progress_step(0.05, "Converting PDF...")
   # convert_args: method and api_url (and backend) of the chosen converter.
@@ -468,6 +475,11 @@ LLM_DEFAULT_PROVIDER <- "mistral"
 # METACHECK_LLM_MODEL are set. No text leaves the server for this step, unless
 # METACHECK_LLM_NAME names another server that the model runs on.
 LLM_SERVER_NAME <- Sys.getenv("METACHECK_LLM_NAME")
+# The server of the models tried before this one (metacheck_llm_first_*,
+# llm_first.R), and those models; "" when there are none.
+LLM_FIRST_MODELS <- gsub("\\s*,\\s*", ", ", trimws(Sys.getenv("METACHECK_LLM_FIRST_MODELS")))
+LLM_FIRST_SERVER <- if (nzchar(Sys.getenv("METACHECK_LLM_FIRST_URL")) && nzchar(LLM_FIRST_MODELS))
+  Sys.getenv("METACHECK_LLM_FIRST_NAME", "another server") else ""
 if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
   LLM_PROVIDERS <- c(list(local = list(
@@ -498,6 +510,16 @@ if (nzchar(Sys.getenv("OLLAMA_BASE_URL")) &&
     )
   )), LLM_PROVIDERS)
   LLM_DEFAULT_PROVIDER <- "local"
+  # models tried before this one (metacheck_llm_first_*, llm_first.R)
+  if (nzchar(LLM_FIRST_SERVER)) {
+    base <- LLM_PROVIDERS$local
+    LLM_PROVIDERS$local$label <- paste0(LLM_FIRST_SERVER, ", otherwise ",
+                                        sub("^This", "this", base$label))
+    LLM_PROVIDERS$local$privacy <- paste0(
+      "The model runs on ", LLM_FIRST_SERVER, " (", LLM_FIRST_MODELS, "), a server chosen ",
+      "by the administrators of this server, when a model runs there; the paragraphs ",
+      "are then sent there to be analysed. Otherwise: ", base$privacy)
+  }
 }
 
 # On the user's own computer (the metacheck Docker image), the user's own API
@@ -818,7 +840,13 @@ server <- function(input, output, session) {
       "\U0001F512 We will not retrieve information from online data repositories about linked URLs."
     }
 
-    llm_use_text <- if (use_llm && identical(llm_provider()$region, "local")) {
+    llm_use_text <- if (use_llm && identical(llm_provider()$model, LLM_PROVIDERS$local$model) &&
+                        nzchar(LLM_FIRST_SERVER)) {
+      sprintf("\U0001F310 An LLM is enabled on %s (model %s) when a model runs there, otherwise on %s: model %s. Only the power-related paragraphs are used, and sent there.",
+              LLM_FIRST_SERVER, LLM_FIRST_MODELS,
+              if (identical(llm_provider()$region, "server")) LLM_SERVER_NAME else HERE,
+              sub("^[^/]+/", "", llm_provider()$model))
+    } else if (use_llm && identical(llm_provider()$region, "local")) {
       sprintf("\U0001F512 An LLM is enabled on %s: model %s. Only the power-related paragraphs are used, and they are not sent to an external provider.",
               HERE, sub("^[^/]+/", "", llm_provider()$model))
     } else if (use_llm && identical(llm_provider()$region, "server")) {
