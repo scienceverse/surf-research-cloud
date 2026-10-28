@@ -47,12 +47,23 @@ METACHECK_LLM_SHARED=true
 OLLAMA_BASE_URL={{ metacheck_url_llm_base }}
 VLLM_API_KEY={{ metacheck_llm_api_key if metacheck_llm_api_key != 'none' else '' }}
 METACHECK_LLM_MODEL={{ metacheck_llm_model }}
-METACHECK_LLM_NAME={{ metacheck_llm_name_value }}
+METACHECK_LLM_NAME="{{ metacheck_llm_name_value | replace('"', '') }}"
 {% endif %}
 {% if metacheck_llm_max_tokens != 'none' and (metacheck_local_llm | bool or metacheck_shared_llm | bool or metacheck_url_llm | bool) %}
 
 # The longest answer the model may give, in tokens (metacheck_llm_max_tokens).
 METACHECK_LLM_MAX_TOKENS={{ metacheck_llm_max_tokens }}
+{% endif %}
+{% if metacheck_llm_first_url != 'none' %}
+
+# Models the power check tries before the model above, which stays the
+# fallback (metacheck_llm_first_*, llm_first.R); each check is logged in
+# METACHECK_LLM_FIRST_LOG, which the server watch summarises daily.
+METACHECK_LLM_FIRST_URL={{ metacheck_llm_first_url_value }}
+METACHECK_LLM_FIRST_MODELS={{ metacheck_llm_first_models | regex_replace('\s+', '') }}
+METACHECK_LLM_FIRST_KEY={{ metacheck_llm_first_api_key if metacheck_llm_first_api_key != 'none' else '' }}
+METACHECK_LLM_FIRST_NAME="{{ metacheck_llm_first_name_value | replace('"', '') }}"
+METACHECK_LLM_FIRST_LOG=/var/lib/metacheck-watch/llm-first.log
 {% endif %}
 
 # Modules installed from GitHub (metacheck_modules, metacheck::module_install()),

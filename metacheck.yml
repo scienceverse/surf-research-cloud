@@ -75,6 +75,17 @@
     # metacheck's default. A model that reasons before it answers needs more,
     # such as 16000 for DeepSeek on SPIKE-1.
     metacheck_llm_max_tokens: "none"
+    # Models the power check tries before the model above, which stays the
+    # fallback (app/llm_first.R): an OpenAI-compatible address, used as given
+    # (it is followed by /models and /chat/completions), such as the SPIKE-1
+    # relay https://shiny.ieis.tue.nl/spike_relay; the models in order of
+    # preference, separated by commas; its key ("none" = no key); and the name
+    # the app shows for it ("none" = the address's host name). The first model
+    # that the server lists as running is used. "none" = no such models.
+    metacheck_llm_first_url: "none"
+    metacheck_llm_first_models: "none"
+    metacheck_llm_first_api_key: "none"
+    metacheck_llm_first_name: "none"
     metacheck_mistral_api_key: "none"
     metacheck_groq_api_key: "none"
     metacheck_max_upload: "100M"
@@ -316,11 +327,15 @@
           - metacheck_llm in ['ollama', 'ollama-cpu', 'bibr', 'url', 'none']
           - metacheck_llm != 'url' or metacheck_llm_url is regex('^https?://[^/]+')
           - metacheck_llm_max_tokens == 'none' or metacheck_llm_max_tokens is regex('^[1-9][0-9]*$')
+          - metacheck_llm_first_url == 'none' or metacheck_llm_first_url is regex('^https?://[^/]+')
+          - metacheck_llm_first_url == 'none' or metacheck_llm_first_models != 'none'
         fail_msg: >-
           metacheck_llm must be ollama, ollama-cpu, bibr, url or none; with url,
           metacheck_llm_url must be an address such as
-          https://spike-gateway-runai-aiteam.inference.spike.tue.nl/v1; and
-          metacheck_llm_max_tokens must be none or a whole number.
+          https://spike-gateway-runai-aiteam.inference.spike.tue.nl/v1;
+          metacheck_llm_max_tokens must be none or a whole number; and
+          metacheck_llm_first_url must be none or an address, with
+          metacheck_llm_first_models set.
 
     - name: Decide on the local model
       ansible.builtin.set_fact:
@@ -364,6 +379,37 @@
       failed_when: false
       no_log: true
       when: metacheck_url_llm | bool
+
+    # The models tried before that one (metacheck_llm_first_*). A warning, not
+    # an error: when none of them runs, the power check uses the model above.
+    - name: Name the server of the models tried first
+      ansible.builtin.set_fact:
+        metacheck_llm_first_url_value: "{{ metacheck_llm_first_url | trim | regex_replace('/+$', '') }}"
+        metacheck_llm_first_name_value: "{{ metacheck_llm_first_name if metacheck_llm_first_name != 'none' else (metacheck_llm_first_url | urlsplit('hostname')) }}"
+      when: metacheck_llm_first_url != 'none'
+
+    - name: Check the server of the models tried first
+      ansible.builtin.uri:
+        url: "{{ metacheck_llm_first_url_value }}/models"
+        headers: "{{ {'Authorization': 'Bearer ' ~ metacheck_llm_first_api_key} if metacheck_llm_first_api_key != 'none' else {} }}"
+        timeout: 20
+      register: llm_first_probe
+      failed_when: false
+      no_log: true
+      when: metacheck_llm_first_url != 'none'
+
+    - name: Note which models the power check tries first
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'The power check first tries ' ~ metacheck_llm_first_models ~ ' on ' ~ metacheck_llm_first_name_value ~
+             ((': the server answers and lists ' ~
+               ((metacheck_llm_first_models.split(',') | map('trim') | select('in', llm_first_probe.json.data | default([]) | map(attribute='id') | list) | list | join(', ')) or 'none of them') ~
+               '. It uses one of them only when the server lists it as running, and otherwise the model of metacheck_llm.')
+              if (llm_first_probe.status | default(0)) == 200
+              else (', but the server does not answer (' ~ ('HTTP ' ~ llm_first_probe.status if (llm_first_probe.status | default(-1)) > 0
+                                                          else 'no connection: ' ~ (llm_first_probe.msg | default('') | truncate(120))) ~
+                    '); the power check uses the model of metacheck_llm until it does.')) }}
+      when: metacheck_llm_first_url != 'none'
 
     - name: Note which model the power check uses
       ansible.builtin.debug:
@@ -838,6 +884,7 @@
         - { src: api/watch.R, dest: watch.R }
         - { src: app/bibr_client.R, dest: bibr_client.R }
         - { src: app/llm_modules.R, dest: llm_modules.R }
+        - { src: app/llm_first.R, dest: llm_first.R }
       register: api_files
 
     # The website: static files, served by nginx (location /site/).
@@ -1151,4 +1198,5 @@
           - "metacheck paper report app: /metacheck/ on the workspace URL (Shiny Server on 127.0.0.1:{{ metacheck_shiny_port }})"
           - "{{ ('PDF conversion: bibr at ' ~ metacheck_bibr_url_value) if metacheck_bibr_url_value | length > 0 else 'PDF conversion: GROBID servers (no bibr configured)' }}"
           - "{{ ('Local model for the power check: ' ~ metacheck_llm_model ~ ' at ' ~ ollama_url) if metacheck_local_llm | bool else (('Model for the power check: ' ~ metacheck_llm_model ~ ' on the bibr workspace, ' ~ metacheck_shared_llm_url) if metacheck_shared_llm | bool else (('Model for the power check: ' ~ metacheck_llm_model ~ ' on ' ~ metacheck_llm_name_value ~ ', ' ~ metacheck_url_llm_base) if metacheck_url_llm | bool else 'No model for the power check')) }}"
+          - "{{ ('Models tried first for the power check: ' ~ metacheck_llm_first_models ~ ' on ' ~ metacheck_llm_first_name_value ~ ', ' ~ metacheck_llm_first_url_value) if metacheck_llm_first_url != 'none' else 'No models tried first for the power check' }}"
           - "Web interface: {{ metacheck_api_workers }} job(s) at a time{{ (', the code of each with at most ' ~ metacheck_sandbox_cpus_value ~ ' processors and ' ~ metacheck_sandbox_memory_mb ~ ' MB') if metacheck_sandbox_on | bool else ', no code is run' }}"

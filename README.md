@@ -478,8 +478,12 @@ server posts short messages there (`api/notify.R`):
   but not their e-mail address;
 - problems the server watch finds (`api/watch.R`, every 15 minutes through
   `metacheck-watch.timer`, only with a webhook): the web interface, bibr, GROBID or
-  the language model does not answer, or less than 15 GB is free for jobs. It posts
-  when a problem starts and when it is over, not while it lasts.
+  the language model does not answer, the server of the models tried first does
+  not answer or offers none of them, or less than 15 GB is free for jobs. It posts
+  when a problem starts and when it is over, not while it lasts;
+- with models tried first (see "Models tried first"), once a day from 08:00 Dutch
+  time, how many power checks of the day before used them and how many this
+  server's own model, and why.
 
 The address is kept in `/etc/metacheck-discord-webhook` (root only) and written to
 the shiny user's `~/.Renviron`, so a later run with the default `keep` keeps it,
@@ -513,10 +517,53 @@ package to it. So name only a server you trust with what people upload.
 
 TU/e's SPIKE-1 answers only on TU/e's network or VPN. From the metacheck workspace
 on SURF Research Cloud its gateway did not answer on 23 October 2026 (no
-connection within 20 s), while other TU/e servers did. Using it from SURF needs
-SPIKE-1's administrators (supercomputing@tue.nl) to let the workspace's outgoing
-address through (`curl -s https://ifconfig.me` on the workspace; a new workspace
-may get another one).
+connection within 20 s), while other TU/e servers did. It does answer through a
+relay on TU/e's Shiny server (`https://shiny.ieis.tue.nl/spike_relay`, a small
+Shiny app that passes requests with its own key on to SPIKE-1 with the SPIKE-1
+key), which is how "Models tried first" uses it.
+
+## Models tried first
+
+With `metacheck_llm_first_url` and `metacheck_llm_first_models`, the power check
+(in the app and the web interface) first tries the models of another server, and
+uses the model of `metacheck_llm` only when none of them is available:
+
+```
+metacheck_llm_first_url=https://shiny.ieis.tue.nl/spike_relay
+metacheck_llm_first_models=qwen3-8-27b-fp8,DeepSeek-V41-Flash-1017-FP8
+metacheck_llm_first_api_key=<the relay's key>
+metacheck_llm_first_name=TU/e's SPIKE-1
+```
+
+`app/llm_first.R` does this through a wrapper around metacheck's `module_run()`,
+so metacheck itself is not changed:
+
+- When a paper's power check starts, it asks the server for its models
+  (`<url>/models`, at most 30 s) and uses the first model of the list that the
+  server lists as `running`. SPIKE-1 also lists a model that is still loading as
+  running (`running: true`, status "initializing (loading onto GPU)"), and that
+  model does not answer yet, so only the status `running` counts. A server that
+  gives no status counts every model it lists.
+- When none is running, the check uses this server's model, and the first model
+  of the list is sent a one-word question without waiting for the answer: SPIKE-1
+  then loads it for the next paper (SPIKE-1 unloads a model after 15 to 60
+  minutes without use). The relay answers one request at a time, and SPIKE-1
+  answers this question only after about 45 s, so the question carries the header
+  `X-Relay-Wait: no`, on which the relay sends it on by itself and answers at once.
+- When the check on the first server could not check every paragraph, or failed
+  as a whole, it runs again on this server's model.
+- Each request to the first server may take at most 60 s, with one retry;
+  SPIKE-1 itself ends requests after about 30 s.
+
+metacheck switches the model's thinking off only for Qwen 3 models, so DeepSeek
+thinks before it answers: on 28 October 2026 it answered 39 of 40 test paragraphs,
+most in 1 to 5 s, one in 21 s, and one ran out of answer length (which this
+server's model then checks again).
+
+Each power check writes one line to `/var/lib/metacheck-watch/llm-first.log`
+(`METACHECK_LLM_FIRST_LOG`): the time, `app` or `web`, the model (`local` for this
+server's) and why, but nothing about the paper. The server watch posts a summary
+of it to Discord once a day (see "Messages to Discord") and keeps the last 30 days.
 
 ## A public metacheck app
 
@@ -818,6 +865,10 @@ and `auto` means "decide on the workspace".
 | `metacheck_llm_api_key` | `none` | with `url`: that server's key (sent as `Authorization: Bearer`); `none` = no key |
 | `metacheck_llm_name` | `none` | with `url`: the name the app shows for that server; `none` = its host name |
 | `metacheck_llm_max_tokens` | `none` | the longest answer, in tokens, the server's model may give; `none` = metacheck's default. A model that reasons first needs more (16000 for DeepSeek on SPIKE-1) |
+| `metacheck_llm_first_url` | `none` | an OpenAI-compatible address whose models the power check tries before the model of `metacheck_llm` (see "Models tried first"), used as given: `/models` and `/chat/completions` follow it; `none` = none |
+| `metacheck_llm_first_models` | `none` | with `metacheck_llm_first_url`: the models to try, in order, separated by commas |
+| `metacheck_llm_first_api_key` | `none` | with `metacheck_llm_first_url`: that server's key; `none` = no key |
+| `metacheck_llm_first_name` | `none` | with `metacheck_llm_first_url`: the name the app shows for that server; `none` = its host name |
 | `metacheck_discord_webhook` | `keep` | a Discord channel's webhook for messages about PsyArXiv reports and server problems (see "Messages to Discord"); `keep` = the one stored before, `none` = none |
 | `metacheck_api_workers` | `2` | web interface jobs at a time; the others wait in the queue |
 | `metacheck_sandbox_cpus` | `auto` | processors one job's code may use in the sandbox; `auto` = 4, or fewer when the workspace has fewer |
@@ -985,6 +1036,29 @@ systemctl list-timers metacheck-auto-update.timer  # when it runs next
 sudo metacheck-auto-update --force                 # install now, without waiting for jobs
 sudo systemctl disable --now metacheck-auto-update.timer   # switch it off until the next playbook run
 ```
+
+## The SPIKE relay
+
+`spike_relay/app.R` is the relay through which the SURF workspace reaches TU/e's
+SPIKE-1 (see "Models tried first"). It is not part of a workspace: it runs as a
+Shiny app on TU/e's Shiny server (`shiny-op01.ieis.tue.nl`, folder
+`ShinyApps/spike_relay/`, address `https://shiny.ieis.tue.nl/spike_relay`), which
+SPIKE-1 does answer. It answers on every address under the app, accepts POST,
+checks the caller's key and passes the request on with the SPIKE-1 key. Nothing
+is stored or logged. Shiny Server runs one R process per app, so the relay
+answers one request at a time.
+
+Its settings go in a `.Renviron` file next to `app.R`, readable only by its owner
+and the group `shiny` (`chmod 640`, `chgrp shiny`), never in this repository:
+
+```
+RELAY_KEY=<a long random key; the same as metacheck_llm_first_api_key>
+SPIKE_API_KEY=<the SPIKE-1 key>
+# SPIKE_GATEWAY=<optional; default https://spike-gateway-runai-aiteam.inference.spike.tue.nl/v1>
+```
+
+To update it, copy `app.R` into that folder and `touch restart.txt` there. The
+Shiny server can be reached only from TU/e's network.
 
 ## Developing these components
 

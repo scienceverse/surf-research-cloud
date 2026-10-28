@@ -3,7 +3,9 @@
 # it checks that the web interface, the PDF converters and the language model
 # answer and that there is disk space for jobs, and sends a message to Discord
 # (notify.R) when a problem starts and when it is over, not while it lasts.
-# What was wrong at the last check is kept in METACHECK_WATCH_STATE.
+# What was wrong at the last check is kept in METACHECK_WATCH_STATE. With
+# models tried first for the power check (llm_first.R), it also checks their
+# server, and posts once a day which model the power checks used.
 
 source("notify.R")
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
@@ -52,6 +54,28 @@ if (nzchar(llm) && nzchar(Sys.getenv("METACHECK_LLM_MODEL"))) {
     problems <- c(problems, llm = "The language model does not answer; the power check runs without it.")
   }
 }
+# The server of the models tried first (llm_first.R): a problem when it does
+# not answer or offers none of them, not when none of them is running, which
+# is normal (SPIKE-1 unloads a model that has not been used for 15-60 minutes,
+# and a job wakes it).
+first <- sub("/+$", "", Sys.getenv("METACHECK_LLM_FIRST_URL"))
+first_models <- trimws(strsplit(Sys.getenv("METACHECK_LLM_FIRST_MODELS"), ",")[[1]])
+first_name <- Sys.getenv("METACHECK_LLM_FIRST_NAME", "The server of the models tried first")
+if (nzchar(first) && length(first_models)) {
+  key <- Sys.getenv("METACHECK_LLM_FIRST_KEY")
+  offered <- function(resp) {
+    ids <- vapply(httr2::resp_body_json(resp)$data,
+                  function(m) if (isFALSE(m$accessible)) "" else m$id %||% "", character(1))
+    any(first_models %in% ids)
+  }
+  if (!answers(paste0(first, "/models"), ok = offered,
+               headers = if (nzchar(key)) list(Authorization = paste("Bearer", key)) else list())) {
+    problems <- c(problems, llm_first = paste0(
+      first_name, " does not answer, or offers none of ", paste(first_models, collapse = ", "),
+      "; the power check uses this server's model."))
+  }
+}
+
 free_gb <- tryCatch({
   out <- system2("df", c("-P", "-B1G", shQuote(JOBS)), stdout = TRUE)
   as.numeric(strsplit(trimws(out[length(out)]), "\\s+")[[1]][4])
@@ -73,3 +97,47 @@ if (length(over)) {
 }
 dir.create(dirname(STATE), recursive = TRUE, showWarnings = FALSE)
 jsonlite::write_json(as.list(problems), STATE, auto_unbox = TRUE)
+
+# Once a day, from 08:00 Dutch time: which model the power checks of the day
+# before used (METACHECK_LLM_FIRST_LOG, one line per check, llm_first.R), when
+# there were any. The log keeps the last 30 days; LAST_SUMMARY the date of the
+# last summary.
+LOG <- Sys.getenv("METACHECK_LLM_FIRST_LOG")
+LAST_SUMMARY <- file.path(dirname(STATE), "llm-first-summary.txt")
+now <- as.POSIXlt(Sys.time(), tz = "Europe/Amsterdam")
+today <- as.Date(format(now, "%Y-%m-%d"))
+last <- if (file.exists(LAST_SUMMARY))
+  tryCatch(as.Date(readLines(LAST_SUMMARY, warn = FALSE)[1]), error = function(e) NA) else NA
+if (nzchar(LOG) && file.exists(LOG) && now$hour >= 8 && (is.na(last) || last < today)) {
+  log <- tryCatch(utils::read.delim(LOG, header = FALSE, quote = "", stringsAsFactors = FALSE,
+                                    col.names = c("time", "where", "model", "reason")),
+                  error = function(e) NULL)
+  if (!is.null(log) && nrow(log)) {
+    when <- as.POSIXct(log$time, format = "%Y-%m-%dT%H:%M:%S%z")
+    day <- as.Date(format(when, "%Y-%m-%d", tz = "Europe/Amsterdam"))
+    y <- log[!is.na(day) & day == today - 1, , drop = FALSE]
+    if (nrow(y)) {
+      counts <- function(x) {
+        n <- sort(table(x), decreasing = TRUE)
+        paste(paste(names(n), n), collapse = ", ")
+      }
+      on_first <- y$model != "local"
+      local <- y[!on_first, , drop = FALSE]
+      notify(paste0(
+        "Power checks on ", format(today - 1, "%d %B"), ": ", nrow(y),
+        " (app ", sum(y$where == "app"), ", web interface ", sum(y$where == "web"), ").\n",
+        "- on ", first_name, ": ", sum(on_first),
+        if (any(on_first)) paste0(" (", counts(y$model[on_first]), ")"), "\n",
+        "- on this server's model: ", nrow(local),
+        if (nrow(local)) paste0(" (", counts(sub(";.*", "", local$reason)), ")")))
+    }
+    keep <- !is.na(day) & day >= today - 30
+    if (!all(keep)) {
+      tmp <- tempfile(tmpdir = dirname(LOG))
+      utils::write.table(log[keep, , drop = FALSE], tmp, sep = "\t", quote = FALSE,
+                         row.names = FALSE, col.names = FALSE)
+      file.rename(tmp, LOG)
+    }
+  }
+  writeLines(as.character(today), LAST_SUMMARY)
+}
