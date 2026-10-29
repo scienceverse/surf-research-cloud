@@ -468,19 +468,24 @@ revised README. To let another check use the model, add it to `LLM_MODULES`.
 
 With `metacheck_discord_webhook` set to a Discord channel's webhook address
 (channel settings, Integrations, Webhooks, New Webhook, Copy Webhook URL), the
-server posts short messages there (`api/notify.R`):
+server posts short messages there (`api/notify.R`). They are written for
+whoever looks after the server, in plain words: what stopped working, what that
+means for visitors, and what to do.
 
-- each finished PsyArXiv report: title, preprint id and version, a link to the
-  report (`/psyarxiv-reports/?id=<id>`), the converter and the time it took;
+- each finished PsyArXiv report: title and version, a link to the report
+  (`/psyarxiv-reports/?id=<id>`) and the time it took;
 - each failed PsyArXiv report, with the error, and a run that could not start
   because PsyArXiv or the web interface did not answer;
 - each mistake a reader reports in a PsyArXiv report, with the reader's message
   but not their e-mail address;
 - problems the server watch finds (`api/watch.R`, every 15 minutes through
-  `metacheck-watch.timer`, only with a webhook): the web interface, bibr, GROBID or
-  the language model does not answer, the server of the models tried first does
-  not answer or offers none of them, or less than 15 GB is free for jobs. It posts
-  when a problem starts and when it is over, not while it lasts;
+  `metacheck-watch.timer`, only with a webhook): the web interface, bibr, GROBID,
+  LibreOffice or the language model does not answer, the server of the models
+  tried first does not answer or offers none of them, less than 15 GB is free for
+  jobs, or one of the server's API keys was refused, reached its limit or expires
+  within two weeks (see "API keys for the data repositories"). It posts when a
+  problem starts and when it is over, not while it lasts. While the web interface
+  does not answer, the keys' problems are not known and stay as they were;
 - with models tried first (see "Models tried first"), once a day from 08:00 Dutch
   time, how many power checks of the day before used them and how many this
   server's own model, and why.

@@ -40,14 +40,15 @@ get_json <- function(url) {
 modules <- tryCatch(unlist(get_json(paste0(API, "/modules"))$allowed), error = function(e) NULL)
 if (!length(modules)) {
   log("the web interface did not answer; trying again at the next run")
-  notify("PsyArXiv reports: the web interface did not answer; trying again at the next run.")
+  notify(paste("This hour's reports on new PsyArXiv preprints were skipped, because the website's",
+               "checking service did not answer. The next attempt is in an hour."))
   quit(save = "no")
 }
 newest <- tryCatch(get_json(sprintf("%s/preprints?sort=newest&per_page=%d", PSY, min(N, 100)))$results,
                    error = function(e) {
                      log("PsyArXiv did not answer: ", conditionMessage(e))
-                     notify(paste0("PsyArXiv reports: PsyArXiv did not answer (", conditionMessage(e),
-                                   "); trying again at the next run."))
+                     notify(paste("This hour's reports on new PsyArXiv preprints were skipped,",
+                                  "because PsyArXiv did not answer. The next attempt is in an hour."))
                      NULL
                    })
 
@@ -139,6 +140,10 @@ for (p in newest) {
   title <- gsub("[*_`~|]", "", p$title %||% id)   # no Discord formatting from a title
   link <- sprintf("%s/psyarxiv-reports/?id=%s", notify_site(), id)
   mins <- function() round(as.numeric(difftime(Sys.time(), t0, units = "mins")))
+  took <- function() {
+    m <- mins()
+    paste0("The check took ", m, if (m == 1) " minute." else " minutes.")
+  }
 
   # 1. the full report: every check, and the code of the paper's repository
   outcome <- "full"
@@ -180,16 +185,18 @@ for (p in newest) {
       if (length(first)) paste0(" (full check: ", first, ")"),
       if (!r$ok) paste0(" (second try: ", r$error, ")"), " (", mins(), " min)")
   if (identical(outcome, "full")) {
-    notify(sprintf("New PsyArXiv report: **%s** (%s, version %s)\n%s\nPDF converted by %s; %s min.",
-                   title, id, p$version, link, r$converter, mins()))
+    notify(sprintf("metacheck made a report on a new PsyArXiv preprint: **%s** (version %s)\n%s\n%s",
+                   title, p$version, link, took()))
   } else if (identical(outcome, "without_repository_checks")) {
-    notify(sprintf(paste0("New PsyArXiv report, without the repository checks: **%s** (%s, version %s)\n%s\n",
-                          "The full check did not finish: %s\nPDF converted by %s; %s min."),
-                   title, id, p$version, link, first, r$converter, mins()))
+    notify(sprintf(paste0("metacheck made a report on a new PsyArXiv preprint: **%s** (version %s), ",
+                          "but without checking its data and code repositories, because the check ",
+                          "with them failed: %s\n%s\n%s"),
+                   title, p$version, first, link, took()))
   } else {
-    notify(sprintf(paste0("PsyArXiv report failed: **%s** (%s, version %s)\n",
-                          "The page says the automated check failed: %s\n",
-                          "Full check: %s\nWithout the repository checks: %s"),
-                   title, id, p$version, link, first %||% "-", r$error))
+    notify(sprintf(paste0("metacheck could not make a report on the new PsyArXiv preprint **%s** ",
+                          "(version %s). Its report page now says the automated check failed.\n%s\n",
+                          "Reason for the full check: %s\n",
+                          "Reason for the check without the data and code repositories: %s"),
+                   title, p$version, link, first %||% "-", r$error))
   }
 }
