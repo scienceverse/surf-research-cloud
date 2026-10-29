@@ -492,6 +492,62 @@ it as a parameter only where the workspace logs are not read by others, or put i
 that file on the workspace yourself. Messages never mention anyone (no `@everyone`,
 whatever a title contains).
 
+## API keys for the data repositories
+
+metacheck reads the data and code repositories a paper links to. Some of them
+need a key, or allow far more requests with one, and all visitors of this
+server share its internet address (checked 2026-10-28):
+
+| Setting | Service | Without a key | With a key |
+|---|---|---|---|
+| `metacheck_dryad_client_id`, `metacheck_dryad_client_secret` | Dryad | files cannot be downloaded | downloads work (100 per hour) |
+| `metacheck_researchbox_api_key` | ResearchBox | the web page, which asks for a captcha after a few downloads | its API |
+| `metacheck_github_pat` | GitHub | 60 requests per hour | 5,000 per hour |
+| `metacheck_osf_pat` | OSF | 100 requests per hour | 10,000 per day |
+| `metacheck_gitlab_pat` | GitLab | 500 per minute (GitLab has announced 60 per hour) | 2,000 per minute |
+| `metacheck_openalex_api_key` | OpenAlex | US$0.10 of searches per day | US$1 per day |
+
+Zenodo, Figshare, Dataverse and the other repositories gave no gain for public
+records, so they get no key here.
+
+**A key gives every visitor what its account can read.** An OSF key needs the
+`osf.full_read` scope, which opens its owner's private projects, so use an OSF
+account that belongs to no projects; the same holds for GitLab, and for Dryad
+and ResearchBox accounts with unpublished datasets. For GitHub, a fine-grained
+token with "Public repositories" access and no permissions reads only public
+repositories. Dryad gives client ids for services at help@datadryad.org.
+
+Each key is kept in `/etc/metacheck-keys/<variable>` (root only) and written to
+the shiny user's `~/.Renviron`, so a later run with the default `keep` keeps
+it, and `none` removes it. A key added to `~/.Renviron` by hand is gone after
+the next run. As with the Discord webhook, pass a key as a parameter only where
+the workspace logs are not read by others, or put it in its file on the
+workspace yourself (`sudo sh -c 'umask 077; cat > /etc/metacheck-keys/GITHUB_PAT'`)
+and run the playbook with `keep`.
+
+When a key is refused (expired or withdrawn) or reaches its limit, metacheck
+records that in `METACHECK_STATE_DIR` (`/var/lib/metacheck-state`), which the
+app, the web interface's jobs and the PsyArXiv reports share (see
+`metacheck::api_key_status()`). Then:
+
+- a refused key is left out, so requests go without a key, and checked again
+  after an hour;
+- the paper report app shows the message ("The Dryad key provided by
+  metacheck has reached Dryad's limit until 15:00 UTC. Please provide your own
+  Dryad key to continue (you can make one at ...)"), and its Options tab has a
+  folded box "Your own API keys (optional)";
+- `GET /api/health` lists the problems in `key_problems`, and the website then
+  shows the message and a field for the visitor's own key;
+- the server watch posts the problem on Discord, and also when the GitHub key
+  expires within two weeks.
+
+A visitor's own key (the app's box, the website's field, or the web interface's
+fields `key_github`, `key_osf`, `key_dryad`, `key_researchbox`, `key_gitlab`,
+`key_openalex`) is used for that visitor's job only. The app passes it to the
+job's own R process; the web interface keeps it in memory until the job starts
+and never writes it to the job's folder. The server's keys stay in place for
+everyone else.
+
 ## A model on another server
 
 With `metacheck_llm = url`, the power check (in the app and the web interface) and
@@ -870,6 +926,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_llm_first_api_key` | `none` | with `metacheck_llm_first_url`: that server's key; `none` = no key |
 | `metacheck_llm_first_name` | `none` | with `metacheck_llm_first_url`: the name the app shows for that server; `none` = its host name |
 | `metacheck_discord_webhook` | `keep` | a Discord channel's webhook for messages about PsyArXiv reports and server problems (see "Messages to Discord"); `keep` = the one stored before, `none` = none |
+| `metacheck_github_pat`, `metacheck_osf_pat`, `metacheck_dryad_client_id`, `metacheck_dryad_client_secret`, `metacheck_researchbox_api_key`, `metacheck_gitlab_pat`, `metacheck_openalex_api_key` | `keep` | API keys for the data repositories and OpenAlex (see "API keys for the data repositories"); `keep` = the one stored before, `none` = none |
 | `metacheck_api_workers` | `2` | web interface jobs at a time; the others wait in the queue |
 | `metacheck_sandbox_cpus` | `auto` | processors one job's code may use in the sandbox; `auto` = 4, or fewer when the workspace has fewer |
 | `metacheck_sandbox_memory` | `auto` | memory one job's code may use, such as `8G` or `6000M`; `auto` = 16G, or less: the workspace's memory minus 4G, shared among `metacheck_api_workers` jobs |

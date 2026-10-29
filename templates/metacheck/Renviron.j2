@@ -82,6 +82,20 @@ MISTRAL_API_KEY={{ metacheck_mistral_api_key }}
 GROQ_API_KEY={{ metacheck_groq_api_key }}
 {% endif %}
 
+# metacheck's state folder: which API key below was refused or reached its
+# limit (metacheck::api_key_status(); the app and the website then ask
+# visitors for their own key), and ResearchBox's count of requests for boxes
+# it could not find.
+METACHECK_STATE_DIR=/var/lib/metacheck-state
+{% if metacheck_repository_key_values | length > 0 %}
+
+# API keys for the data repositories and OpenAlex (metacheck_github_pat, ...;
+# kept in /etc/metacheck-keys, root only).
+{% for env, value in metacheck_repository_key_values | dictsort %}
+{{ env }}={{ value }}
+{% endfor %}
+{% endif %}
+
 # PsyArXiv reports (prototype; api/psyarxiv_reports.R): the folder, how many
 # newest preprints get a report, and the key of the delete links.
 PSYARXIV_REPORTS_DIR={{ metacheck_psyarxiv_reports_dir }}

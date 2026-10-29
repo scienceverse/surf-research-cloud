@@ -106,6 +106,37 @@ async function runJob(fields, ui) {
   return res.blob();
 }
 
+// ---- the visitor's own API keys ----------------------------------------------
+// When a key the server provides (GitHub, OSF, Dryad, ResearchBox, GitLab,
+// OpenAlex) was refused or reached its limit, GET /health lists it in
+// key_problems. The page then says so and offers a field for the visitor's own
+// key, sent with the check as key_<service> and used for that check only.
+function showKeyProblems(section, problems) {
+  let box = section.querySelector(".key-problems");
+  if (!problems || !problems.length) {
+    if (box) box.remove();
+    return;
+  }
+  if (!box) {
+    box = el("div", { class: "key-problems" });
+    section.querySelector("button.go").before(box);
+  }
+  box.replaceChildren(...problems.map(p => el("div", { class: "key-problem" },
+    el("p", {}, p.message),
+    el("label", {}, "Your own " + p.label + " key (used for this check only): ",
+      el("input", { type: "password", class: "own-key", "data-service": p.service,
+                    autocomplete: "off", spellcheck: "false" })))));
+}
+
+function ownKeys(section) {
+  const keys = {};
+  for (const input of section.querySelectorAll("input.own-key")) {
+    const v = input.value.trim();
+    if (v) keys["key_" + input.dataset.service] = v;
+  }
+  return keys;
+}
+
 function offerReport(ui, blob, filename, extra) {
   const url = URL.createObjectURL(new Blob([blob], { type: "text/html" }));
   ui.result([
@@ -147,7 +178,7 @@ function setupLinkCheck(section, opts) {
     busy = true;
     ready();
     try {
-      const blob = await runJob(await opts.fields(k, section), ui);
+      const blob = await runJob(Object.assign({}, await opts.fields(k, section), ownKeys(section)), ui);
       offerReport(ui, blob, opts.filename(k), opts.extra ? opts.extra(k) : null);
     } catch (e) {
       ui.error(e.message || String(e));
@@ -162,6 +193,7 @@ function setupLinkCheck(section, opts) {
     .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(h => {
       serverReady = true;
+      showKeyProblems(section, h.key_problems);
       note.textContent = "Server: metacheck " + (h.metacheck_version || "") +
         (h.jobs_waiting ? " · " + h.jobs_waiting + " waiting" : "");
       const v = document.getElementById("version");

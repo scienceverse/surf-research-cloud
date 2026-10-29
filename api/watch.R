@@ -84,6 +84,32 @@ if (!is.na(free_gb) && free_gb < MIN_FREE_GB) {
   problems <- c(problems, disk = sprintf("Only %s GB free for jobs; below 10 GB new jobs are refused.", free_gb))
 }
 
+# The data repositories' keys the server provides that were refused or
+# reached their limit (key_problems of /health: metacheck::api_key_status()),
+# and a GitHub key that expires within two weeks: GitHub gives the date with
+# each answer to a request with the key, and /rate_limit does not count
+# toward the limit.
+for (p in health$key_problems %||% list()) {
+  problems <- c(problems, stats::setNames(p$message, paste0("key_", p$service)))
+}
+github_key <- Sys.getenv("GITHUB_PAT")
+if (nzchar(github_key)) {
+  expires <- tryCatch({
+    resp <- httr2::request("https://api.github.com/rate_limit") |>
+      httr2::req_headers(Authorization = paste("token", github_key), `User-Agent` = "metacheck") |>
+      httr2::req_timeout(20) |> httr2::req_error(is_error = function(r) FALSE) |>
+      httr2::req_perform()
+    # "2026-11-27 12:00:00 UTC"; none for a key without an end date
+    httr2::resp_header(resp, "github-authentication-token-expiration")
+  }, error = function(e) NULL)
+  when <- if (!is.null(expires)) as.POSIXct(expires, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+  if (length(when) == 1 && !is.na(when) && difftime(when, Sys.time(), units = "days") < 14) {
+    problems <- c(problems, key_github_expiry = paste0(
+      "The GitHub key (GITHUB_PAT) expires on ", format(when, "%Y-%m-%d"),
+      "; make a new one and give it as metacheck_github_pat."))
+  }
+}
+
 before <- tryCatch(unlist(jsonlite::read_json(STATE)), error = function(e) character(0))
 new <- problems[!names(problems) %in% names(before)]
 over <- before[!names(before) %in% names(problems)]

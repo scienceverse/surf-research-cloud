@@ -43,6 +43,7 @@ suppressPackageStartupMessages({
 
 source("render_report.R")
 source("background_job.R")
+source("api_keys.R")
 
 # Load server-provided API keys (MISTRAL_API_KEY, GROQ_API_KEY) from a
 # .Renviron in this app directory. Shiny Server does not reliably read a
@@ -265,6 +266,10 @@ VALIDATED_MODULES <- c(
   "stat_check", "stat_p_exact", "stat_p_nonsig", "stat_effect_size",
   "repo_check", "code_check", "data_check", "codebook_check"
 )
+
+# The services whose keys a visitor can enter (see api_keys.R): those the
+# repository modules read
+KEY_SERVICES <- c("github", "osf", "dryad", "researchbox", "gitlab")
 
 # GROBID servers offered. GROBID on this server (a SURF Research Cloud
 # workspace with metacheck_grobid_url = local, which sets GROBID_LOCAL_URL, or
@@ -602,6 +607,7 @@ report_tab <- tabItem(
     "is never lost silently. Thank you for your patience."
   ),
   if (!METACHECK_LOCAL) uiOutput("busy_banner"),
+  uiOutput("api_key_notice"),
   tags$div(class = "pdf-upload",
     fileInput("upload_pdf", NULL, multiple = FALSE, accept = ".pdf",
               width = "100%",
@@ -698,7 +704,8 @@ options_tab <- tabItem(
     tags$br(),
     actionButton("options_done", "Done — back to Create Report",
                  icon = icon("arrow-left"), class = "btn-options-done")
-  )
+  ),
+  api_keys_box(KEY_SERVICES)
 )
 
 ui <- dashboardPage(
@@ -762,6 +769,9 @@ server <- function(input, output, session) {
                 inuse, MAX_CONCURRENT_REPORTS))
     } else NULL
   })
+
+  output$api_key_notice <- renderUI(
+    api_key_notice(KEY_SERVICES, session, where = "in the Options tab"))
 
   # The currently selected LLM provider definition (defaults to the default).
   llm_provider <- reactive({
@@ -980,7 +990,7 @@ server <- function(input, output, session) {
       convert_args = CONVERTERS[[input$grobid_server_choice %||% DEFAULT_CONVERTER]],
       use_crossref = use_crossref, modules = modules,
       use_llm = use_llm, llm_model = prov$model %||% "", htmlpath = htmlpath
-    ))
+    ), keys = api_keys_entered(input, KEY_SERVICES))
     stop_watch <- bg_watch(job, session, "Generating report",
       heartbeat = slot, max_minutes = 30,
       on_done = function(result) {

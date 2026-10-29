@@ -127,6 +127,19 @@
     # Kept in /etc/metacheck-discord-webhook (root only), so "keep" (the
     # default) keeps an address given before; "none" removes it.
     metacheck_discord_webhook: "keep"
+    # API keys for the data repositories metacheck reads (see "API keys for
+    # the data repositories" in README.md). Each is kept in
+    # /etc/metacheck-keys/<variable> (root only), so "keep" (the default)
+    # keeps a key given before, and "none" removes it. A key gives access to
+    # everything its account can read: use an account that owns no private
+    # material (GitHub: a fine-grained token for public repositories only).
+    metacheck_github_pat: "keep"
+    metacheck_osf_pat: "keep"
+    metacheck_dryad_client_id: "keep"
+    metacheck_dryad_client_secret: "keep"
+    metacheck_researchbox_api_key: "keep"
+    metacheck_gitlab_pat: "keep"
+    metacheck_openalex_api_key: "keep"
 
     # ---- fixed settings ----
     component_label: "metacheck component"
@@ -729,6 +742,106 @@
       register: discord_webhook_content
       no_log: true
       when: discord_webhook_file.stat.exists
+
+    # ---- API keys for the data repositories (metacheck_github_pat, ...) ----
+    # Stored like the Discord webhook: one root-only file per key, read back
+    # on every run, so "keep" keeps it. Only letters, digits and _.~+/=- are
+    # accepted, so a key cannot break the .Renviron line it is written to.
+    - name: List the data repositories' API keys
+      ansible.builtin.set_fact:
+        metacheck_repository_keys:
+          - { env: GITHUB_PAT, value: "{{ metacheck_github_pat }}" }
+          - { env: OSF_PAT, value: "{{ metacheck_osf_pat }}" }
+          - { env: DRYAD_CLIENT_ID, value: "{{ metacheck_dryad_client_id }}" }
+          - { env: DRYAD_CLIENT_SECRET, value: "{{ metacheck_dryad_client_secret }}" }
+          - { env: RESEARCHBOX_API_KEY, value: "{{ metacheck_researchbox_api_key }}" }
+          - { env: GITLAB_PAT, value: "{{ metacheck_gitlab_pat }}" }
+          - { env: OPENALEX_API_KEY, value: "{{ metacheck_openalex_api_key }}" }
+      no_log: true
+
+    - name: Check the API keys
+      ansible.builtin.assert:
+        that:
+          - item.value in ['keep', 'none'] or item.value is regex('^[A-Za-z0-9_.~+/=-]+$')
+        fail_msg: >-
+          {{ item.env }}: give the key itself (letters, digits and _.~+/=- only),
+          keep, or none.
+      loop: "{{ metacheck_repository_keys }}"
+      loop_control:
+        label: "{{ item.env }}"
+      no_log: true
+
+    - name: Create the folder for the API keys (root only)
+      ansible.builtin.file:
+        path: /etc/metacheck-keys
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Store the API keys (root only)
+      ansible.builtin.copy:
+        dest: "/etc/metacheck-keys/{{ item.env }}"
+        content: "{{ item.value }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ metacheck_repository_keys }}"
+      loop_control:
+        label: "{{ item.env }}"
+      no_log: true
+      when: item.value not in ['keep', 'none']
+
+    - name: Remove the API keys set to none
+      ansible.builtin.file:
+        path: "/etc/metacheck-keys/{{ item.env }}"
+        state: absent
+      loop: "{{ metacheck_repository_keys }}"
+      loop_control:
+        label: "{{ item.env }}"
+      when: item.value == 'none'
+
+    - name: Look for stored API keys
+      ansible.builtin.stat:
+        path: "/etc/metacheck-keys/{{ item.env }}"
+      loop: "{{ metacheck_repository_keys }}"
+      loop_control:
+        label: "{{ item.env }}"
+      register: repository_key_files
+
+    - name: Read the stored API keys
+      ansible.builtin.slurp:
+        src: "/etc/metacheck-keys/{{ item.item.env }}"
+      loop: "{{ repository_key_files.results }}"
+      loop_control:
+        label: "{{ item.item.env }}"
+      register: repository_key_contents
+      no_log: true
+      when: item.stat.exists
+
+    - name: Decide the API keys
+      ansible.builtin.set_fact:
+        metacheck_repository_key_values: >-
+          {{ dict(repository_key_contents.results
+                  | selectattr('content', 'defined')
+                  | map(attribute='item.item.env')
+                  | zip(repository_key_contents.results
+                        | selectattr('content', 'defined')
+                        | map(attribute='content')
+                        | map('b64decode') | map('trim'))) }}
+      no_log: true
+
+    # metacheck's state folder (METACHECK_STATE_DIR): which of the keys above
+    # was refused or reached its limit, and ResearchBox's count of requests
+    # for boxes it could not find, shared by the app, the web interface's jobs
+    # and the PsyArXiv reports, which each run in a folder of their own.
+    - name: Create metacheck's state folder
+      ansible.builtin.file:
+        path: /var/lib/metacheck-state
+        state: directory
+        owner: shiny
+        group: shiny
+        mode: "0700"
 
     - name: Read this workspace's public address
       ansible.builtin.command: hostname -f
