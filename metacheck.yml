@@ -745,7 +745,7 @@
 
     # ---- API keys for the data repositories (metacheck_github_pat, ...) ----
     # Stored like the Discord webhook: one root-only file per key, read back
-    # on every run, so "keep" keeps it. Only letters, digits and _.~+/=- are
+    # on every run, so "keep" keeps it. Only letters, digits and _.~+/=@- are
     # accepted, so a key cannot break the .Renviron line it is written to.
     - name: List the data repositories' API keys
       ansible.builtin.set_fact:
@@ -762,9 +762,9 @@
     - name: Check the API keys
       ansible.builtin.assert:
         that:
-          - item.value in ['keep', 'none'] or item.value is regex('^[A-Za-z0-9_.~+/=-]+$')
+          - item.value in ['keep', 'none'] or item.value is regex('^[A-Za-z0-9_.~+/=@-]+$')
         fail_msg: >-
-          {{ item.env }}: give the key itself (letters, digits and _.~+/=- only),
+          {{ item.env }}: give the key itself (letters, digits and _.~+/=@- only),
           keep, or none.
       loop: "{{ metacheck_repository_keys }}"
       loop_control:
