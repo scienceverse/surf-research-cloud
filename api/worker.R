@@ -542,7 +542,12 @@ render_checklist_html <- function(module_output, paper) {
   })
 }
 
-do_job <- function(job_dir) {
+# `keys`: the sender's own API keys (api.R, .parse_keys()), used for this job
+# only, in place of the server's keys
+do_job <- function(job_dir, keys = list()) {
+  if (exists("api_keys_use", envir = asNamespace("metacheck"))) {
+    metacheck::api_keys_use(keys, shared = !.local())
+  }
   job <- jsonlite::read_json(file.path(job_dir, "job.json"), simplifyVector = TRUE)
   input <- file.path(job_dir, job$input_file)
   .set_status(job_dir, status = "running", step = "starting", started = .now())

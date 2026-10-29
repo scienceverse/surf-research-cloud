@@ -25,6 +25,12 @@
 # RESULT_KEEP_MINUTES after they are finished. The job id is a random UUID: only
 # whoever submitted a job can fetch its result.
 #
+# A request may carry the sender's own API keys for the data repositories
+# (fields key_github, key_osf, key_dryad, key_researchbox, key_gitlab,
+# key_openalex), used for that job only instead of the server's keys; see
+# "visitors' own API keys" below. GET /health lists the server's keys that
+# were refused or reached their limit (key_problems).
+#
 # PDFs are converted by the bibr server the component is connected to
 # (BIBR_API_URL / BIBR_API_KEY), or, when bibr fails, by the GROBID server in
 # METACHECK_GROBID_URL (see worker.R). Only the modules the paper report app
@@ -78,6 +84,40 @@ DEFAULT_MODULES <- c(
   "power", "marginal", "ethics_check", "stat_check", "stat_p_exact",
   "stat_p_nonsig", "stat_effect_size"
 )
+
+# ---- visitors' own API keys ---------------------------------------------------
+# The server's keys are environment variables (from /home/shiny/.Renviron),
+# which every worker inherits. A sender's own keys (form fields key_<service>)
+# take their place for that job only (metacheck::api_keys_use() in worker.R).
+# They are kept in this process's memory until the job starts and handed to
+# its worker; they are never written to the job's folder, which keeps the
+# job's description and result for an hour. A job still waiting when this
+# service restarts runs with the server's keys.
+KEY_SERVICES <- c("github", "osf", "dryad", "researchbox", "gitlab", "openalex")
+job_keys <- new.env()
+# metacheck's messages call the server's keys "provided by metacheck", except
+# on someone's own computer
+options(metacheck.keys.shared = !METACHECK_LOCAL)
+
+.parse_keys <- function(fields) {
+  keys <- lapply(KEY_SERVICES, function(s) trimws(fields[[paste0("key_", s)]] %||% ""))
+  names(keys) <- KEY_SERVICES
+  keys[nzchar(unlist(keys))]
+}
+
+# The server's keys that were refused or reached their limit, with the
+# message for the visitor (metacheck::api_key_status()); none with a
+# metacheck older than that function.
+.key_problems <- function() {
+  if (!exists("api_key_status", envir = asNamespace("metacheck"))) return(list())
+  st <- tryCatch(metacheck::api_key_status(), error = function(e) NULL)
+  if (is.null(st)) return(list())
+  st <- st[!is.na(st$message), , drop = FALSE]
+  lapply(seq_len(nrow(st)), function(i) {
+    list(service = st$service[i], label = st$label[i],
+         message = st$message[i], url = st$url[i])
+  })
+}
 
 .now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
 .job_dir <- function(id) file.path(JOBS_DIR, id)
@@ -161,6 +201,8 @@ running <- new.env()          # job id -> callr process
   st$status <- "running"; st$step <- "starting"; st$started <- .now()
   .write_status(id, st)
   job <- .read_job(id)
+  keys <- if (exists(id, envir = job_keys, inherits = FALSE)) get(id, envir = job_keys) else list()
+  if (length(keys)) rm(list = id, envir = job_keys)
   env <- callr::rcmd_safe_env()
   if (isTRUE(job$run_code)) {
     # The job's own folder on the sandbox file system holds everything the
@@ -175,12 +217,12 @@ running <- new.env()          # job id -> callr process
              if (!SANDBOX_PROCESS) c(PATH = paste(SANDBOX_BIN, Sys.getenv("PATH"), sep = ":")))
   }
   running[[id]] <- callr::r_bg(
-    function(api_dir, job_dir) {
+    function(api_dir, job_dir, keys) {
       setwd(api_dir)
       source("worker.R")
-      do_job(job_dir)
+      do_job(job_dir, keys = keys)
     },
-    args = list(api_dir = API_DIR, job_dir = .job_dir(id)),
+    args = list(api_dir = API_DIR, job_dir = .job_dir(id), keys = keys),
     stdout = file.path(.job_dir(id), "worker.log"),
     stderr = "2>&1",
     env = env,
@@ -277,6 +319,10 @@ running <- new.env()          # job id -> callr process
           unlink(.job_dir(id), recursive = TRUE)
         }
       }
+    }
+    # keys of a job whose folder is gone (it never started)
+    for (id in ls(job_keys)) {
+      if (!dir.exists(.job_dir(id))) rm(list = id, envir = job_keys)
     }
   }, error = function(e) message("scheduler: ", conditionMessage(e)))
   later::later(.scheduler, 1)
@@ -529,6 +575,8 @@ later::later(.scheduler, 1)
                             visitor = .visitor_code(req),
                             report = .parse_flag(up$fields$report)),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
+  keys <- .parse_keys(up$fields)
+  if (length(keys)) assign(id, keys, envir = job_keys)
   .write_status(id, list(status = "queued", step = "waiting in the queue", created = .now(),
                         seq = as.numeric(Sys.time())))
   id
@@ -660,6 +708,10 @@ function() {
        # Cloud) or "none"
        convert_backup = if (identical(Sys.getenv("METACHECK_CONVERT_BACKUP"), "surf") &&
                             .grobid_kind() == "remote") "surf" else "none",
+       # the server's keys that were refused or reached their limit, with the
+       # message for the visitor; the website then offers fields for the
+       # visitor's own key (key_<service>)
+       key_problems = .key_problems(),
        workers = MAX_WORKERS)
 }
 
@@ -726,6 +778,12 @@ function() {
 #* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...) instead of the full (paper) or brief (repository) report
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
+#* @param key_github your own GitHub key (optional), used for this job only instead of the server's key; see key_problems in GET /health
+#* @param key_osf your own OSF key (optional), used for this job only instead of the server's key; see key_problems in GET /health
+#* @param key_dryad your own Dryad key (optional), used for this job only instead of the server's key; see key_problems in GET /health
+#* @param key_researchbox your own ResearchBox key (optional), used for this job only instead of the server's key; see key_problems in GET /health
+#* @param key_gitlab your own GitLab key (optional), used for this job only instead of the server's key; see key_problems in GET /health
+#* @param key_openalex your own OpenAlex key (optional), used for this job only instead of the server's key; see key_problems in GET /health
 #* @serializer unboxedJSON
 function(req, res) {
   id <- tryCatch(.submit(req), error = function(e) e)

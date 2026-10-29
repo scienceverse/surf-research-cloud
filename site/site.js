@@ -137,6 +137,37 @@ function statusArea(section) {
   };
 }
 
+// ---- the visitor's own API keys ----------------------------------------------
+// When a key the server provides (GitHub, OSF, Dryad, ResearchBox, GitLab,
+// OpenAlex) was refused or reached its limit, GET /health lists it in
+// key_problems. The page then says so and offers a field for the visitor's own
+// key, sent with the check as key_<service> and used for that check only.
+function showKeyProblems(section, problems) {
+  let box = section.querySelector(".key-problems");
+  if (!problems || !problems.length) {
+    if (box) box.remove();
+    return;
+  }
+  if (!box) {
+    box = el("div", { class: "key-problems" });
+    section.querySelector("button.go").before(box);
+  }
+  box.replaceChildren(...problems.map(p => el("div", { class: "key-problem" },
+    el("p", {}, p.message),
+    el("label", {}, "Your own " + p.label + " key (used for this check only): ",
+      el("input", { type: "password", class: "own-key", "data-service": p.service,
+                    autocomplete: "off", spellcheck: "false" })))));
+}
+
+function ownKeys(section) {
+  const keys = {};
+  for (const input of section.querySelectorAll("input.own-key")) {
+    const v = input.value.trim();
+    if (v) keys["key_" + input.dataset.service] = v;
+  }
+  return keys;
+}
+
 // ---- sending a job and following it ----------------------------------------
 
 // POST /api/jobs with upload progress (fetch cannot report it, XMLHttpRequest can).
@@ -158,7 +189,7 @@ async function runJob(section, file, filename, kind, fields, ui) {
   const form = new FormData();
   form.append("kind", kind);
   form.append("source", "website");   // for the use log: website or code
-  for (const [k, v] of Object.entries(fields || {})) form.append(k, v);
+  for (const [k, v] of Object.entries(Object.assign({}, fields, ownKeys(section)))) form.append(k, v);
   if (file) form.append("file", file, filename);
 
   ui.progress(0, file ? "Uploading " + sizeText(file.size) + "…" : "Sending the link…");
@@ -524,6 +555,11 @@ document.getElementById("curl-example").textContent =
 
 fetch(API + "/health").then(r => r.json()).then(h => {
   if (h.metacheck_version) document.getElementById("version").textContent = "Metacheck version " + h.metacheck_version + ".";
+  // the paper report reads repositories too (repo_check, data_check)
+  for (const id of ["tool-report", "tool-folder"]) {
+    const section = document.getElementById(id);
+    if (section) showKeyProblems(section, h.key_problems);
+  }
   // GROBID on this server (or none): PDFs never go to TU/e's GROBID server
   const exception = document.getElementById("grobid-exception");
   if (exception && (h.grobid === "local" || h.grobid === "none")) exception.hidden = true;

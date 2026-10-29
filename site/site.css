@@ -128,6 +128,11 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
 }
 .tool p { margin: 0 0 14px; }
 .note { font-size: 0.88rem; color: var(--muted); }
+/* a key the server provides was refused or used up (site.js, showKeyProblems) */
+.key-problems { margin: 8px 0 12px; }
+.key-problem { border-left: 3px solid var(--error); padding: 4px 0 4px 10px; margin-bottom: 8px; }
+.key-problem p { margin: 0 0 6px; }
+.key-problem input { width: 100%; max-width: 28em; }
 
 /* ---- file choice ---- */
 .drop {
