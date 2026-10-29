@@ -107,7 +107,9 @@ options(metacheck.keys.shared = !METACHECK_LOCAL)
 
 # The server's keys that were refused or reached their limit, with the
 # message for the visitor (metacheck::api_key_status()); none with a
-# metacheck older than that function.
+# metacheck older than that function. problem ("rejected" or "limit"),
+# source ("server", or "none" for the limit without a key) and until are for
+# the server watch's own message (watch.R).
 .key_problems <- function() {
   if (!exists("api_key_status", envir = asNamespace("metacheck"))) return(list())
   st <- tryCatch(metacheck::api_key_status(), error = function(e) NULL)
@@ -115,7 +117,10 @@ options(metacheck.keys.shared = !METACHECK_LOCAL)
   st <- st[!is.na(st$message), , drop = FALSE]
   lapply(seq_len(nrow(st)), function(i) {
     list(service = st$service[i], label = st$label[i],
-         message = st$message[i], url = st$url[i])
+         message = st$message[i], url = st$url[i],
+         problem = st$problem[i], source = st$source[i],
+         until = if (is.na(st$until[i])) NULL
+                 else format(st$until[i], "%Y-%m-%d %H:%M UTC", tz = "UTC"))
   })
 }
 
