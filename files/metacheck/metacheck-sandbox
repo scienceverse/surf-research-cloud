@@ -16,9 +16,13 @@
 #       user 1000:1000 (remapped to an unused host id by Docker's userns-remap),
 #       limited processes, processors, memory and file sizes, the job's own
 #       sandbox folder as the only writable mount, one of the allowed images,
-#       running Rscript or python on a file in /sandbox. Every other option is
-#       refused, and the command is rebuilt here from the checked parts.
-#       The packages folders (/rlib, /pylib) are the guard's own for the job.
+#       running Rscript or python on a file in /sandbox, in /sandbox or a
+#       folder below it, with only the environment variables metacheck sets
+#       (see ENV_RULES). Every other option is refused, and the command is
+#       rebuilt here from the checked parts; the limits metacheck asks for
+#       (--ulimit) are replaced by the guard's own.
+#       The packages folders (/rlib, /pylib) are the guard's own for the job,
+#       writable when metacheck asks, so a package can keep data there.
 #   docker run ... install.R/.sh     metacheck's request to install packages:
 #       the same container, but with the network, running the guard's own
 #       install script for the CRAN/PyPI packages named in the request,
@@ -48,6 +52,13 @@ SANDBOX_ROOT = "/srv/metacheck-sandbox"     # size-limited file system (loop dev
 LIMITS_CONF = "/etc/metacheck-sandbox.conf"  # cpus= and memory_mb=, written by the playbook
 MAX_PIDS = 512
 TMPFS = "/tmp:rw,nosuid,nodev,noexec,size=2g"
+# /tmp when metacheck asks for "/tmp:exec": code compiled while a script runs
+# (rstan's models, Rcpp::sourceCpp(), TMB) is loaded from /tmp, which noexec
+# refused ("failed to map segment from shared object"). The code can already
+# run any machine code through R or Python (Python's ctypes, for one), so
+# noexec on /tmp kept out nothing else; the container stays read-only,
+# without network, capabilities or root.
+TMPFS_EXEC = "/tmp:rw,nosuid,nodev,exec,size=2g"
 MAX_FILE_BYTES = 10 * 1024 ** 3               # largest single file a script may write
 MAX_CONTAINER_MINUTES = 45                    # reap: containers older than this are stopped
 MAX_SANDBOX_HOURS = 3                         # reap: sandbox folders older than this are deleted
@@ -62,7 +73,37 @@ IMAGES = {
     "ghcr.io/scienceverse/metacheck_py_small:latest": "ghcr.io/scienceverse/metacheck_py_large:latest",
 }
 COMMANDS = {"Rscript", "python"}
-MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "ro", "/pylib": "ro"}
+# target -> the modes metacheck may ask for. The packages folders are writable
+# when metacheck asks (it does since 0.4.3): a package can keep data in its own
+# folder, as zipcodeR::download_zip_data() does in /rlib/zipcodeR/data. The
+# folder is the job's own and is deleted with the job.
+MOUNT_TARGETS = {"/sandbox": {"rw"}, "/rlib": {"ro", "rw"}, "/pylib": {"ro", "rw"}}
+
+# The environment variables a script's container may get, as metacheck sets
+# them: name -> a rule for the value.
+# Any folder name of a deposit, such as "Analysis (final)"; a colon is left out
+# because it separates the folders of PYTHONPATH.
+SANDBOX_PATH_RE = re.compile(r"^/sandbox(/[^/\x00-\x1f:]+)*$")
+
+
+def sandbox_path(v):
+    """/sandbox or a folder below it, without "..", "." or empty parts (the
+    container's own path: the container sees only its mounts)."""
+    return bool(SANDBOX_PATH_RE.match(v)) and not any(p in ("..", ".") for p in v.split("/"))
+
+
+ENV_RULES = {
+    "PWD": sandbox_path,                         # as a shell sets it for the working folder
+    "PYTHONPATH": lambda v: all(p == "/pylib" or sandbox_path(p) for p in v.split(":")),
+    "JAVA_TOOL_OPTIONS": lambda v: v == "--add-opens=java.base/java.util=ALL-UNNAMED",
+    "HOME": lambda v: v == "/tmp",
+    "NUMBA_CACHE_DIR": lambda v: v == "/tmp/numba",
+    "MPLCONFIGDIR": lambda v: v == "/tmp/matplotlib",
+    "XDG_CACHE_HOME": lambda v: v == "/tmp/.cache",
+    "MPLBACKEND": lambda v: v == "Agg",
+    "QT_QPA_PLATFORM": lambda v: v == "offscreen",
+}
+ULIMIT_RE = re.compile(r"^[a-z]+=[0-9]+(:[0-9]+)?$")
 
 # Installing a job's packages (see check_install()). The packages go into the
 # guard's own folder for the job, on a disk where compiled code may be loaded
@@ -71,7 +112,7 @@ MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "ro", "/pylib": "ro"}
 LIB_ROOT = "/var/lib/metacheck-sandbox-lib"
 LIB_TARGETS = {"/rlib": "r", "/pylib": "py"}
 INSTALL_ROOT = "/run/metacheck-sandbox-install"   # the guard's install scripts
-INSTALL_MOUNT_TARGETS = {"/sandbox": "rw", "/rlib": "rw", "/pylib": "rw"}
+INSTALL_MOUNT_TARGETS = {"/sandbox": {"rw"}, "/rlib": {"rw"}, "/pylib": {"rw"}}
 INSTALL_TMPFS = "/tmp:rw,nosuid,nodev,size=4g"     # compilers and pip unpack here
 # the install requests metacheck makes: (command, script) -> language
 INSTALL_REQUESTS = {("Rscript", "/sandbox/install.R"): "r", ("sh", "/sandbox/install.sh"): "py"}
@@ -226,9 +267,16 @@ def parse_options(job, args, targets):
             seen[a] = v
         elif a == "--tmpfs":
             v = value(a)
-            if v != "/tmp":
+            if v not in ("/tmp", "/tmp:exec"):
                 refuse(job, "tmpfs %r" % v)
-            seen[a] = v
+            seen[a] = "/tmp"
+            seen["tmp_exec"] = v == "/tmp:exec"
+        elif a == "--ulimit":
+            # metacheck asks for core=1 (no crash files); the guard sets its own
+            # limits, so the value is checked and then left out
+            v = value(a)
+            if not ULIMIT_RE.match(v):
+                refuse(job, "ulimit %r" % v)
         elif a == "--user":
             v = value(a)
             if v != "1000:1000":
@@ -266,13 +314,17 @@ def parse_options(job, args, targets):
             mb = float(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)
             seen[a] = int(min(mb, MAX_MEMORY_MB))
         elif a == "-w":
+            # /sandbox, or the folder below it where metacheck's package layout
+            # put the script
             v = value(a)
-            if v != "/sandbox":
+            if not sandbox_path(v):
                 refuse(job, "working directory %r" % v)
             seen[a] = v
         elif a == "-e":
             v = value(a)
-            if v != "PYTHONPATH=/pylib":
+            name, eq, val = v.partition("=")
+            rule = ENV_RULES.get(name)
+            if not eq or rule is None or not rule(val) or any(e.partition("=")[0] == name for e in env):
                 refuse(job, "environment variable %r" % v)
             env.append(v)
         elif a == "-v":
@@ -284,7 +336,7 @@ def parse_options(job, args, targets):
                 src, target, mode = parts
             else:
                 refuse(job, "mount %r" % v)
-            if target not in targets or targets[target] != mode or target in mounts:
+            if target not in targets or mode not in targets[target] or target in mounts:
                 refuse(job, "mount %r" % v)
             if not os.path.isabs(src) or not os.path.isdir(src):
                 refuse(job, "mount source %r is not a folder" % src)
@@ -303,7 +355,7 @@ def check_run(job, args):
     seen, mounts, env, rest = parse_options(job, args, MOUNT_TARGETS)
     required = {"--rm": True, "--read-only": True, "--network": "none", "--tmpfs": "/tmp",
                 "--user": "1000:1000", "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
-                "--name": None, "--pids-limit": None, "-w": "/sandbox"}
+                "--name": None, "--pids-limit": None, "-w": None}
     for k, want in required.items():
         if k not in seen or (want is not None and seen[k] != want):
             refuse(job, "required option %s missing" % k)
@@ -325,7 +377,7 @@ def check_run(job, args):
            "--label", "metacheck-sandbox=1", "--label", "metacheck-job=%s" % job,
            "--hostname", "sandbox",
            "--network", "none",
-           "--read-only", "--tmpfs", TMPFS,
+           "--read-only", "--tmpfs", TMPFS_EXEC if seen.get("tmp_exec") else TMPFS,
            "--user", "1000:1000",
            "--cap-drop", "ALL",
            "--security-opt", "no-new-privileges",
@@ -333,7 +385,7 @@ def check_run(job, args):
            "--cpus", "%g" % seen.get("--cpus", MAX_CPUS),
            "--memory", "%dm" % memory, "--memory-swap", "%dm" % memory,
            "--ulimit", "core=0", "--ulimit", "fsize=%d" % MAX_FILE_BYTES,
-           "-w", "/sandbox"]
+           "-w", seen["-w"]]
     for target, (src, mode) in sorted(mounts.items()):
         # the packages installed for this job, from the guard's own folder
         # (see lib_dir()), instead of the folder metacheck made for them
@@ -400,7 +452,11 @@ def py_install_request(job, text):
     m = re.search(r'^OUT="(/sandbox/[A-Za-z0-9._-]+)"$', text, re.M)
     if not m:
         refuse(job, "install.sh without its results file")
-    req_re = re.compile(r"^if pip install --quiet --target /pylib '([^']*)' 2> /tmp/err_\d+\.txt; then$")
+    # the first try for each package: "if pip install --quiet --target /pylib
+    # 'req' 2> ..." before metacheck 0.4.3, now "if timeout N pip install
+    # --quiet --prefer-binary ... --prefix /tmp/pyt_K --extra-index-url ... 'req'
+    # 2> ...". Only the requirement is taken; the guard's own script installs it.
+    req_re = re.compile(r"^if (?:timeout \d+ )?pip install [^']* '([^']*)' 2> /tmp/err_\d+\.txt; then$")
     ok_re = re.compile(r'^  printf \'\{"package":"([^"]*)","source":"([^"]*)","installed":true')
     out = []
     req = None

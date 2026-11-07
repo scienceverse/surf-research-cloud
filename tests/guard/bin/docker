@@ -1,0 +1,15 @@
+#!/usr/bin/env Rscript
+# A stand-in for docker: records each call (one JSON array per line) and keeps
+# a copy of the install script it was asked to run; answers like a docker whose
+# containers end at once.
+args <- commandArgs(TRUE)
+cat(jsonlite::toJSON(args), "\n", file = "/out/calls.jsonl", append = TRUE, sep = "")
+if (length(args) && args[1] == "run") {
+  v <- args[which(args == "-v") + 1]
+  sb <- sub(":/sandbox$", "", v[grepl(":/sandbox$", v)])
+  for (f in c("install.R", "install.sh")) {
+    if (length(sb) && file.exists(file.path(sb, f)))
+      file.copy(file.path(sb, f), file.path("/out", f), overwrite = TRUE)
+  }
+}
+quit(status = 0)

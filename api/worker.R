@@ -367,7 +367,8 @@ do_repocheck <- function(job_dir, job) {
                                docker_use_declared_version = FALSE, timeout = 300)
         deadline <- .code_deadline(job_dir)
         if (!is.null(deadline)) margs$run_args$total_timeout <- deadline
-        options(metacheck.docker_resource_limits = .sandbox_limits())
+        options(metacheck.docker_resource_limits = .sandbox_limits(),
+                metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)  # see below
         Sys.umask("000")   # see below: the sandbox's user writes into these folders
       }
       rc$use_shiny_progress()
@@ -397,7 +398,12 @@ do_repocheck <- function(job_dir, job) {
         docker_use_declared_version = FALSE, timeout = 300), code_place)
       deadline <- .code_deadline(job_dir)
       if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
-      options(metacheck.docker_resource_limits = .sandbox_limits())
+      # The guard runs every container as 1000:1000 and refuses another user;
+      # metacheck (0.4.3.7 and later) otherwise asks for the user running R
+      # on Linux. The packages go in a folder, not a Docker volume: the guard
+      # refuses `docker volume` and mounts its own folder for the job instead.
+      options(metacheck.docker_resource_limits = .sandbox_limits(),
+              metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)
       # The sandbox's user (an unused id on this server) must be able to write
       # into the folders metacheck makes for it; they lie inside this job's
       # own folder on the sandbox file system, which only this server's

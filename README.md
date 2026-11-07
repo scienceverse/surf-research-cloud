@@ -280,7 +280,11 @@ with the network, running only the guard's own install script, for packages from
 CRAN (ready built, from Posit's package manager) and PyPI (wheels only). Packages
 from GitHub or other links are not installed. They go into the guard's packages
 folder for the job (`/var/lib/metacheck-sandbox-lib`, on the large disk), which the
-code then sees read-only; the code itself still runs without the network.
+code may also write in (since metacheck 0.4.3: a package can keep data in its own
+folder, as `zipcodeR::download_zip_data()` does); the code itself still runs
+without the network. The worker sets `metacheck.docker_lib_volume = FALSE` (the
+guard refuses `docker volume` and mounts its own folder instead) and
+`metacheck.docker_user = "1000:1000"` (the only user the guard accepts).
 
 Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
 (~750 R packages, JAGS, a JDK, the geospatial stack) and
@@ -302,12 +306,20 @@ How the server is protected (`tasks/sandbox.yml`, `files/metacheck/metacheck-san
    the job's own containers, and `docker run` exactly as metacheck builds it; it
    refuses every other option, image, mount or command, rebuilds the command from
    the checked parts and logs every decision (`journalctl -t metacheck-sandbox`).
+   `tests/guard/run.sh /path/to/metacheck` checks that the guard lets through
+   the commands a metacheck version sends, with the worker's settings, and still
+   refuses what it must; run it after changing the guard and before a new
+   metacheck version reaches the server (the guard refused every code run from
+   2 November 2026 on, when metacheck began asking for `--ulimit` and `/tmp:exec`).
 2. **Locked-down containers.** No network (`--network none`; no images are
    downloaded at run time either), a read-only system, all capabilities dropped,
    no new privileges, a non-root user, at most 512 processes, 4 processors and 16 GB
    memory without swap (by default; see "A smaller metacheck workspace"), files
-   of at most 10 GB, and a `/tmp` without program
-   execution. The only writable mount is the job's own sandbox folder. The one
+   of at most 10 GB, and a `/tmp` of 2 GB. Programs may run from `/tmp` when
+   metacheck asks (`/tmp:exec`), because code compiled while a script runs
+   (rstan's models, `Rcpp::sourceCpp()`, TMB) is loaded from there; the code can
+   already run any machine code through R or Python, so this lets in nothing
+   new. The only writable mounts are the job's own sandbox and packages folders. The one
    exception is the install container (see above): it has the network and may
    write into the job's packages folder, but it runs only the guard's own install
    script, with the names of CRAN and PyPI packages the guard has checked, never a
