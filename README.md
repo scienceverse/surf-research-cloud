@@ -290,7 +290,9 @@ Images (`metacheck_sandbox_images`): `ghcr.io/scienceverse/metacheck_r_large`
 (~750 R packages, JAGS, a JDK, the geospatial stack) and
 `ghcr.io/scienceverse/metacheck_py_large` (the common data-science stack plus
 ~70 packages and CPU-only torch and tensorflow). metacheck asks for the small
-Python image; the guard (below) serves the large one instead. The playbook
+Python image; the guard (below) serves the large one instead. Code written for
+Python 2 runs in the official `python:2.7-slim` (214 MB, no fixes since 2020),
+with its packages in a folder apart from Python 3's. The playbook
 downloads both; when it cannot (they need a GitHub login while they are not
 public), it says so and code is not run until they are present, for example built
 on the workspace from

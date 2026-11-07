@@ -33,16 +33,32 @@ for args in calls:
             os.makedirs(src, exist_ok=True)
             for f in ("install.R", "install.sh"):
                 if args[-1].endswith(f):
-                    with open("/out/" + f) as fh, open(os.path.join(src, f), "w") as out:
+                    copy = f if f == "install.R" else (
+                        "install_py2.sh" if "python:2.7-slim" in args else "install_py3.sh")
+                    with open("/out/" + copy) as fh, open(os.path.join(src, f), "w") as out:
                         out.write(fh.read())
     status, res = check(args[1:])
     kind = "install " + args[-1] if guard.is_install(args[1:]) else "run " + args[-1]
-    print("%-8s %s" % (status, kind))
+    py2 = "python:2.7-slim" in args
+    print("%-8s %s%s" % (status, kind, " (Python 2)" if py2 else ""))
     if status != "ok":
         failures += 1
         print("    ", res)
     else:
         print("    ", " ".join(res[2:]))
+        # Python 2's packages in a folder of their own, Python 3's in theirs
+        libs = [v for v in res if v.endswith(":/pylib:rw") or v.endswith(":/pylib:ro")]
+        want = "/%s/py2:" % JOB if py2 else "/%s/py:" % JOB
+        if libs and not all(want in v for v in libs):
+            failures += 1
+            print("     WRONG package folder:", libs)
+
+# The guard's own Python install script, run by run.sh in Python 2.7 and 3
+with open("/out/install_guard.py", "w") as fh:
+    fh.write(guard.py_install_script("/out/guard_install.jsonl", [
+        ("six", "pypi", "six"),
+        ("no-such-package-mc-test", "pypi", "no-such-package-mc-test"),
+        ("frompgithub", "github", None)]))
 
 # What must still be refused, as changes of a run metacheck sent
 run = calls[3][1:]                      # an R run in "Analysis (final)"

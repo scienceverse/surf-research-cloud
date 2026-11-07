@@ -32,6 +32,7 @@ invisible(suppressWarnings(suppressMessages(
 pydeps <- data.frame(package = c("six", "numpy"), source = "pypi", ref = c(NA, "numpy==1.26.4"))
 invisible(suppressWarnings(suppressMessages(
   repro_install_deps_py_docker(pydeps, pylib, image = img_py, timeout = 20))))
+file.copy("/out/install.sh", "/out/install_py3.sh", overwrite = TRUE)
 
 run_r <- data.frame(file_name = c("a.R", "b.R"),
                     script_path = c(file.path(root, "a.R"), file.path(sub, "b.R")),
@@ -43,6 +44,19 @@ run_py <- data.frame(file_name = c("c.py", "d.py"),
                      run_dir = c(root, sub), module_folders = c(".", "Analysis (final)"))
 invisible(suppressWarnings(suppressMessages(
   repro_run_scripts_py_docker(run_py, run_py$file_name, root, lib_dir = pylib, image = img_py, timeout = 20))))
+
+# Python 2: its packages in _pylib2, as the module keeps them, in its own image
+py2lib <- file.path(root, "_pylib2"); dir.create(py2lib)
+writeLines('print "half", 5/2', file.path(root, "old.py"))
+img_py2 <- "python:2.7-slim"
+invisible(suppressWarnings(suppressMessages(
+  repro_install_deps_py_docker(data.frame(package = "six", source = "pypi", ref = NA_character_),
+                               py2lib, image = img_py2, timeout = 20))))
+file.copy("/out/install.sh", "/out/install_py2.sh", overwrite = TRUE)
+run_py2 <- data.frame(file_name = "old.py", script_path = file.path(root, "old.py"),
+                      run_dir = root, module_folders = ".")
+invisible(suppressWarnings(suppressMessages(
+  repro_run_scripts_py_docker(run_py2, "old.py", root, lib_dir = py2lib, image = img_py2, timeout = 20))))
 
 jsonlite::write_json(list(tmp = normalizePath(tempdir())), "/out/paths.json", auto_unbox = TRUE)
 cat(length(readLines("/out/calls.jsonl")), "calls recorded\n")

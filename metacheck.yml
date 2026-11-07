@@ -173,6 +173,8 @@
     metacheck_sandbox_images:
       - ghcr.io/scienceverse/metacheck_r_large:latest
       - ghcr.io/scienceverse/metacheck_py_large:latest
+      # code written for Python 2 (214 MB; no fixes since 2020)
+      - python:2.7-slim
 
     metacheck_shiny_port: 3838
     metacheck_api_port: 2005
