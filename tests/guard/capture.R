@@ -9,7 +9,20 @@ if (length(need)) {
                    repos = "https://packagemanager.posit.co/cran/__linux__/noble/latest")
 }
 suppressMessages(pkgload::load_all("/pkg", quiet = TRUE, helpers = FALSE))
-options(metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)
+# The worker's own settings (api/worker.R's .sandbox_options()), not a copy of
+# them, and every function of the worker that runs code must set them: one
+# that did not made every container of the PsyArXiv reports be refused.
+worker <- parse("/out/worker.R", keep.source = TRUE)
+w <- new.env()
+for (e in worker) {
+  if (!is.call(e) || !identical(e[[1]], as.name("<-")) || !is.name(e[[2]])) next
+  name <- as.character(e[[2]])
+  if (name %in% c(".sandbox_limits", ".sandbox_options")) eval(e, w)
+  body <- paste(deparse(e[[3]]), collapse = "\n")
+  if (grepl(".code_sandbox()", body, fixed = TRUE) && !grepl(".sandbox_options()", body, fixed = TRUE))
+    stop("api/worker.R: ", name, "() runs code without .sandbox_options()")
+}
+w$.sandbox_options()
 Sys.setenv(PATH = paste("/out/bin", Sys.getenv("PATH"), sep = ":"))
 unlink("/out/calls.jsonl")
 
