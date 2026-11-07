@@ -54,7 +54,7 @@
       # is no bibr, which reads them itself: "local" = LibreOffice on this
       # workspace (Gotenberg, tasks/docx.yml) makes a PDF, which GROBID then
       # converts; "none" = Word files cannot be checked without bibr.
-      metacheck_docx_converter: "none"
+      metacheck_docx_converter: "local"
       # The language model for the LLM power check:
       # "ollama" = a local model when this workspace has a GPU, otherwise the
       #   model of the bibr workspace on the private network (bibr.yml,

@@ -667,7 +667,8 @@ do_job <- function(job_dir, keys = list()) {
     } else {
       results <- lapply(full, function(r) json_safe(list(
         module = r$module, title = r$title, traffic_light = r$traffic_light,
-        summary_text = r$summary_text, table = r$table, summary_table = r$summary_table)))
+        summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
+        section = r$section, report = r$report)))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
         # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
