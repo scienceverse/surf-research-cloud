@@ -665,15 +665,26 @@ do_job <- function(job_dir, keys = list()) {
       writeLines(html, file.path(job_dir, "result.html"), useBytes = TRUE)
       type <- "text/html; charset=utf-8"
     } else {
-      results <- lapply(full, function(r) json_safe(list(
-        module = r$module, title = r$title, traffic_light = r$traffic_light,
-        summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
-        section = r$section, report = r$report)))
+      # each module's output, with the fields metacheck's checklist report
+      # also reads (report-checklist.R: checks, checklist_section, intro, and
+      # repo_check's naming_issues and useless_files for the file tree), so a
+      # page can show the checklist report from this JSON; those fields only
+      # when a module gives them
+      results <- lapply(full, function(r) json_safe(c(
+        list(module = r$module, title = r$title, traffic_light = r$traffic_light,
+             summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
+             section = r$section, report = r$report),
+        Filter(Negate(is.null), list(
+          checks = r$checks, checklist_section = r$checklist_section, intro = r$intro,
+          naming_issues = r$naming_issues, useless_files = r$useless_files)))))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
         # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
         converter = converter,
-        paper_info = as.list(info_fields(paper, c("title", "doi"))[1, , drop = FALSE]),
+        # title and DOI, and the authors and reference list the converter read
+        paper_info = c(as.list(info_fields(paper, c("title", "doi"))[1, , drop = FALSE]),
+                       list(authors = json_safe(paper$author),
+                            references = json_safe(paper$bib))),
         modules = results,
         report_html = html
       )
