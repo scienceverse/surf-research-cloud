@@ -385,11 +385,15 @@ later::later(.scheduler, 1)
   }
   raw <- f$value
   head4 <- if (length(raw) >= 4) raw[1:4] else raw
+  # a Word file is a zip archive too; it has the parts [Content_Types].xml and word/document.xml
+  is_zip <- identical(head4, as.raw(c(0x50, 0x4b, 0x03, 0x04))) ||
+            identical(head4, as.raw(c(0x50, 0x4b, 0x05, 0x06)))
   kind <- if (identical(head4, charToRaw("%PDF"))) "pdf"
-          else if (identical(head4, as.raw(c(0x50, 0x4b, 0x03, 0x04))) ||
-                   identical(head4, as.raw(c(0x50, 0x4b, 0x05, 0x06)))) "zip"
+          else if (is_zip && length(grepRaw("[Content_Types].xml", raw, fixed = TRUE)) &&
+                   length(grepRaw("word/document.xml", raw, fixed = TRUE))) "docx"
+          else if (is_zip) "zip"
           else if (length(raw) && rawToChar(raw[1]) %in% c("{", "[")) "json"
-          else stop("The file is not a PDF, bibr JSON or a .zip file.", call. = FALSE)
+          else stop("The file is not a PDF, Word (.docx), bibr JSON or a .zip file.", call. = FALSE)
   if (kind == "zip" && length(raw) > MAX_ZIP_BYTES) {
     stop("The .zip file is larger than 500 MB. Leave out large data or output files that do not need checking, and try again.", call. = FALSE)
   }
@@ -535,7 +539,7 @@ later::later(.scheduler, 1)
   }
   psyarxiv <- if (up$kind == "psyarxiv") .psyarxiv_id(up$fields$psyarxiv) else NULL
   # without bibr, a GROBID server (METACHECK_GROBID_URL) converts the PDF
-  if (up$kind %in% c("pdf", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL")) &&
+  if (up$kind %in% c("pdf", "docx", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL")) &&
       !nzchar(Sys.getenv("METACHECK_GROBID_URL"))) {
     stop("This server has no PDF converter (bibr or GROBID): send bibr JSON instead of a PDF.", call. = FALSE)
   }
@@ -773,7 +777,7 @@ function() {
 #* @post /jobs
 #* @parser multi
 #* @parser octet
-#* @param file:file The PDF or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
+#* @param file:file The PDF, Word (.docx) or bibr JSON (at most 50 MB), or for repocheck a .zip (at most 500 MB)
 #* @param url for repocheck, instead of a file: a link to an online repository (GitHub, OSF, Zenodo, ...)
 #* @param psyarxiv for report or check, instead of a file: a PsyArXiv preprint's link, DOI or id (the server fetches its PDF from PsyArXiv)
 #* @param kind "report" (default), "check", "convert" or "repocheck"

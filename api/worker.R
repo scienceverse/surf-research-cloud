@@ -563,7 +563,7 @@ do_job <- function(job_dir, keys = list()) {
 
     # 0. a PsyArXiv preprint: fetch its file (PDF, or a Word .docx, which bibr
     # reads too), then go on as for an uploaded PDF
-    ext <- ".pdf"
+    ext <- if (identical(job$input_kind, "docx")) ".docx" else ".pdf"
     if (identical(job$input_kind, "psyarxiv")) {
       .set_status(job_dir, step = "fetching the preprint from PsyArXiv")
       pp <- .fetch_psyarxiv(job$psyarxiv, job_dir)
@@ -575,7 +575,7 @@ do_job <- function(job_dir, keys = list()) {
 
     # 1. bibr JSON: convert the PDF (or .docx), or use the uploaded JSON
     converter <- NULL
-    if (job$input_kind == "pdf") {
+    if (job$input_kind %in% c("pdf", "docx")) {
       .set_status(job_dir, step = if (ext == ".docx") "converting the Word file with bibr" else "converting the PDF with bibr")
       # bibr uses Crossref only when asked (it sends the reference list there)
       # writes <job_dir>/input.json, with the upload's own name in it (the
@@ -589,7 +589,7 @@ do_job <- function(job_dir, keys = list()) {
     } else {
       json <- input
     }
-    if (job$input_kind == "pdf") unlink(input)        # the PDF is no longer needed
+    if (job$input_kind %in% c("pdf", "docx")) unlink(input)        # the PDF is no longer needed
 
     if (job$kind == "convert") {
       file.rename(json, file.path(job_dir, "result.json"))
