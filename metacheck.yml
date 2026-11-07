@@ -23,107 +23,114 @@
 
   vars:
     # ---- component parameters (strings; "none" = not set, "auto" = decide) ----
-    metacheck_repo: "scienceverse/metacheck"
-    # dev is where metacheck is developed; main lags months behind.
-    metacheck_ref: "dev"
-    # Modules to install from GitHub (metacheck::module_install(), metacheck
-    # 0.4.0.1 or later), "owner/repo", separated by commas or spaces; "none" =
-    # none. The web interface's repository check can run each on an uploaded
-    # .zip (modules=<name>); nobody can install a module through it.
-    metacheck_modules: "Lakens/tue_datamanager_check"
-    # "auto" = the bibr on this workspace if the bibr component ran first,
-    # else none; "none" = no bibr; or a bibr address on the SRC private
-    # network, such as http://10.10.10.12:8000
-    metacheck_bibr_url: "auto"
-    # bibr's token; needed with an explicit metacheck_bibr_url
-    metacheck_bibr_api_key: "none"
-    # The GROBID server the web interface converts a PDF with when bibr
-    # fails or there is none (metacheck's convert(), method "grobid"); the
-    # report says which one converted it. "local" = GROBID on this workspace
-    # (tasks/grobid.yml, in Docker, no GPU needed; the app offers it too);
-    # "none" = no fallback.
-    metacheck_grobid_url: "https://grobid.hti.ieis.tue.nl"
-    # Word files (.docx, such as a quarter of PsyArXiv's preprints) when there
-    # is no bibr, which reads them itself: "local" = LibreOffice on this
-    # workspace (Gotenberg, tasks/docx.yml) makes a PDF, which GROBID then
-    # converts; "none" = Word files cannot be checked without bibr.
-    metacheck_docx_converter: "none"
-    # The language model for the LLM power check:
-    # "ollama" = a local model when this workspace has a GPU, otherwise the
-    #   model of the bibr workspace on the private network (bibr.yml,
-    #   bibr_share_llm), so this workspace needs no GPU;
-    # "ollama-cpu" = a local model without a GPU, on the processors (slower:
-    #   the power check of three power analyses took 36 to 51 s on 2 cores,
-    #   and the model keeps about 4.5G of memory);
-    # "bibr" = always the bibr workspace's model; "url" = the model of
-    #   another OpenAI-compatible server (vLLM, Ollama, a gateway such as
-    #   TU/e's SPIKE-1) at metacheck_llm_url; "none" = no model (the app's
-    #   cloud providers below are still possible).
-    # metacheck_llm_model must be the model that workspace or server serves.
-    metacheck_llm: "ollama"
-    metacheck_llm_model: "qwen3.5:4b"
-    metacheck_ollama_context: "16384"
-    # With metacheck_llm = url: the server's address (with or without /v1),
-    # its key ("none" = no key), and the name the app shows for it ("none" =
-    # the address's host name). The app, the web interface and the installed
-    # modules (such as tue_datamanager_check) send text to this server as to
-    # a model of their own, so name only a server you trust with uploads.
-    metacheck_llm_url: "none"
-    metacheck_llm_api_key: "none"
-    metacheck_llm_name: "none"
-    # The longest answer, in tokens, the server's model may give; "none" =
-    # metacheck's default. A model that reasons before it answers needs more,
-    # such as 16000 for DeepSeek on SPIKE-1.
-    metacheck_llm_max_tokens: "none"
-    # Models the power check tries before the model above, which stays the
-    # fallback (app/llm_first.R): an OpenAI-compatible address, used as given
-    # (it is followed by /models and /chat/completions), such as the SPIKE-1
-    # relay https://shiny.ieis.tue.nl/spike_relay; the models in order of
-    # preference, separated by commas; its key ("none" = no key); and the name
-    # the app shows for it ("none" = the address's host name). The first model
-    # that the server lists as running is used. "none" = no such models.
-    metacheck_llm_first_url: "none"
-    metacheck_llm_first_models: "none"
-    metacheck_llm_first_api_key: "none"
-    metacheck_llm_first_name: "none"
-    metacheck_mistral_api_key: "none"
-    metacheck_groq_api_key: "none"
-    metacheck_max_upload: "100M"
-    # "true" = the app is open to anyone, without the SRAM login; "false" =
-    # SRAM login. Can be changed later with `sudo metacheck-public on|off`.
-    metacheck_public: "false"
-    # "true" = install new versions of metacheck (metacheck_ref) and of the
-    # modules (metacheck_modules) from GitHub by itself: a timer looks every
-    # 15 minutes and installs when no job is running
-    # (files/metacheck/metacheck-auto-update); "false" = only when the
-    # playbook runs.
-    metacheck_auto_update: "true"
-    # PsyArXiv reports (prototype): every hour, a checklist report for each of
-    # this many newest PsyArXiv preprints that has none yet, shown at
-    # /psyarxiv-reports/?id=<id> with a "report a mistake" button; "0" = off.
-    # See api/psyarxiv_reports.R. Switched off for now ("0"): no reports are made.
-    metacheck_psyarxiv_reports: "0"
-    # When none of the newest needs a report, one older preprint without one
-    # per run, going back this many days; "0" = only the newest.
-    metacheck_psyarxiv_reports_back_days: "730"
-    # How many web interface jobs run at a time, each in its own R process;
-    # the others wait in the queue.
-    metacheck_api_workers: "2"
-    # The most processors and memory (such as 16G or 8000M) one job's code
-    # may use in the sandbox. "auto" = 4 processors and 16G, less on a small
-    # workspace: never more processors than it has, and at most its memory
-    # minus 4G, shared among metacheck_api_workers jobs.
-    metacheck_sandbox_cpus: "auto"
-    metacheck_sandbox_memory: "auto"
-    # Where "report a mistake" messages are mailed (with the report and a
-    # delete button), and how: an SMTP server address such as
-    # smtps://smtp.gmail.com:465, with its user name and password. "none" =
-    # messages are only saved (<reports folder>/feedback/).
-    metacheck_mail_to: "none"
-    metacheck_mail_from: "none"
-    metacheck_smtp_url: "none"
-    metacheck_smtp_user: "none"
-    metacheck_smtp_password: "none"
+    # Their defaults. A run uses for each the value given in that run
+    # (--extra-vars), else the value given at an earlier run (kept in
+    # metacheck_settings_file, root only), else the default here; see
+    # "Decide the settings" below. So a run without parameters leaves the
+    # workspace as it was set up, and a changed default here still reaches a
+    # workspace where that setting was never given.
+    metacheck_settings_defaults:
+      metacheck_repo: "scienceverse/metacheck"
+      # dev is where metacheck is developed; main lags months behind.
+      metacheck_ref: "dev"
+      # Modules to install from GitHub (metacheck::module_install(), metacheck
+      # 0.4.0.1 or later), "owner/repo", separated by commas or spaces; "none" =
+      # none. The web interface's repository check can run each on an uploaded
+      # .zip (modules=<name>); nobody can install a module through it.
+      metacheck_modules: "Lakens/tue_datamanager_check"
+      # "auto" = the bibr on this workspace if the bibr component ran first,
+      # else none; "none" = no bibr; or a bibr address on the SRC private
+      # network, such as http://10.10.10.12:8000
+      metacheck_bibr_url: "auto"
+      # bibr's token; needed with an explicit metacheck_bibr_url
+      metacheck_bibr_api_key: "none"
+      # The GROBID server the web interface converts a PDF with when bibr
+      # fails or there is none (metacheck's convert(), method "grobid"); the
+      # report says which one converted it. "local" = GROBID on this workspace
+      # (tasks/grobid.yml, in Docker, no GPU needed; the app offers it too);
+      # "none" = no fallback.
+      metacheck_grobid_url: "https://grobid.hti.ieis.tue.nl"
+      # Word files (.docx, such as a quarter of PsyArXiv's preprints) when there
+      # is no bibr, which reads them itself: "local" = LibreOffice on this
+      # workspace (Gotenberg, tasks/docx.yml) makes a PDF, which GROBID then
+      # converts; "none" = Word files cannot be checked without bibr.
+      metacheck_docx_converter: "none"
+      # The language model for the LLM power check:
+      # "ollama" = a local model when this workspace has a GPU, otherwise the
+      #   model of the bibr workspace on the private network (bibr.yml,
+      #   bibr_share_llm), so this workspace needs no GPU;
+      # "ollama-cpu" = a local model without a GPU, on the processors (slower:
+      #   the power check of three power analyses took 36 to 51 s on 2 cores,
+      #   and the model keeps about 4.5G of memory);
+      # "bibr" = always the bibr workspace's model; "url" = the model of
+      #   another OpenAI-compatible server (vLLM, Ollama, a gateway such as
+      #   TU/e's SPIKE-1) at metacheck_llm_url; "none" = no model (the app's
+      #   cloud providers below are still possible).
+      # metacheck_llm_model must be the model that workspace or server serves.
+      metacheck_llm: "ollama"
+      metacheck_llm_model: "qwen3.5:4b"
+      metacheck_ollama_context: "16384"
+      # With metacheck_llm = url: the server's address (with or without /v1),
+      # its key ("none" = no key), and the name the app shows for it ("none" =
+      # the address's host name). The app, the web interface and the installed
+      # modules (such as tue_datamanager_check) send text to this server as to
+      # a model of their own, so name only a server you trust with uploads.
+      metacheck_llm_url: "none"
+      metacheck_llm_api_key: "none"
+      metacheck_llm_name: "none"
+      # The longest answer, in tokens, the server's model may give; "none" =
+      # metacheck's default. A model that reasons before it answers needs more,
+      # such as 16000 for DeepSeek on SPIKE-1.
+      metacheck_llm_max_tokens: "none"
+      # Models the power check tries before the model above, which stays the
+      # fallback (app/llm_first.R): an OpenAI-compatible address, used as given
+      # (it is followed by /models and /chat/completions), such as the SPIKE-1
+      # relay https://shiny.ieis.tue.nl/spike_relay; the models in order of
+      # preference, separated by commas; its key ("none" = no key); and the name
+      # the app shows for it ("none" = the address's host name). The first model
+      # that the server lists as running is used. "none" = no such models.
+      metacheck_llm_first_url: "none"
+      metacheck_llm_first_models: "none"
+      metacheck_llm_first_api_key: "none"
+      metacheck_llm_first_name: "none"
+      metacheck_mistral_api_key: "none"
+      metacheck_groq_api_key: "none"
+      metacheck_max_upload: "100M"
+      # "true" = the app is open to anyone, without the SRAM login; "false" =
+      # SRAM login. Can be changed later with `sudo metacheck-public on|off`.
+      metacheck_public: "false"
+      # "true" = install new versions of metacheck (metacheck_ref) and of the
+      # modules (metacheck_modules) from GitHub by itself: a timer looks every
+      # 15 minutes and installs when no job is running
+      # (files/metacheck/metacheck-auto-update); "false" = only when the
+      # playbook runs.
+      metacheck_auto_update: "true"
+      # PsyArXiv reports (prototype): every hour, a checklist report for each of
+      # this many newest PsyArXiv preprints that has none yet, shown at
+      # /psyarxiv-reports/?id=<id> with a "report a mistake" button; "0" = off.
+      # See api/psyarxiv_reports.R. Switched off for now ("0"): no reports are made.
+      metacheck_psyarxiv_reports: "0"
+      # When none of the newest needs a report, one older preprint without one
+      # per run, going back this many days; "0" = only the newest.
+      metacheck_psyarxiv_reports_back_days: "730"
+      # How many web interface jobs run at a time, each in its own R process;
+      # the others wait in the queue.
+      metacheck_api_workers: "2"
+      # The most processors and memory (such as 16G or 8000M) one job's code
+      # may use in the sandbox. "auto" = 4 processors and 16G, less on a small
+      # workspace: never more processors than it has, and at most its memory
+      # minus 4G, shared among metacheck_api_workers jobs.
+      metacheck_sandbox_cpus: "auto"
+      metacheck_sandbox_memory: "auto"
+      # Where "report a mistake" messages are mailed (with the report and a
+      # delete button), and how: an SMTP server address such as
+      # smtps://smtp.gmail.com:465, with its user name and password. "none" =
+      # messages are only saved (<reports folder>/feedback/).
+      metacheck_mail_to: "none"
+      metacheck_mail_from: "none"
+      metacheck_smtp_url: "none"
+      metacheck_smtp_user: "none"
+      metacheck_smtp_password: "none"
     # A Discord channel's webhook (https://discord.com/api/webhooks/...) for
     # short messages: each finished or failed PsyArXiv report, mistakes readers
     # report, and problems the server watch finds (api/notify.R, api/watch.R).
@@ -146,6 +153,11 @@
 
     # ---- fixed settings ----
     component_label: "metacheck component"
+    # The component parameters given at earlier runs (JSON, root only; it
+    # holds passwords and keys). `sudo metacheck-public on|off` writes
+    # metacheck_public there too.
+    metacheck_settings_file: /etc/metacheck-settings.json
+    metacheck_settings_given: {}
     # Run the R and Python code of uploaded repositories (metacheck's
     # reproducibility check) in a locked-down Docker sandbox (tasks/sandbox.yml).
     # Skipped when bibr runs on the same workspace (its containers need other
@@ -229,6 +241,51 @@
 
 
   tasks:
+    # ---- the component parameters: given now, else given before, else the default ----
+    # The parameters have no value of their own in `vars` (only in
+    # metacheck_settings_defaults), so one is defined here only when this run
+    # was given it (--extra-vars, which nothing in a playbook can change).
+    - name: Note the parameters given in this run
+      ansible.builtin.set_fact:
+        metacheck_settings_given: "{{ metacheck_settings_given | combine({item: lookup('ansible.builtin.vars', item) | string}) }}"
+      loop: "{{ metacheck_settings_defaults.keys() | list }}"
+      when: lookup('ansible.builtin.vars', item, default='__not_given__') != '__not_given__'
+      no_log: true
+
+    - name: Look for the parameters given at earlier runs
+      ansible.builtin.stat:
+        path: "{{ metacheck_settings_file }}"
+      register: metacheck_settings_file_stat
+
+    - name: Read the parameters given at earlier runs
+      ansible.builtin.slurp:
+        src: "{{ metacheck_settings_file }}"
+      register: metacheck_settings_file_content
+      no_log: true
+      when: metacheck_settings_file_stat.stat.exists
+
+    - name: Keep the parameters given at earlier runs
+      ansible.builtin.set_fact:
+        metacheck_settings_stored: >-
+          {{ (metacheck_settings_file_content.content | b64decode | from_json)
+             if metacheck_settings_file_stat.stat.exists else {} }}
+      no_log: true
+
+    - name: Decide the settings (given now, else given before, else the default)
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ metacheck_settings_given[item.key] | default(metacheck_settings_stored[item.key]) | default(item.value) }}"
+      loop: "{{ metacheck_settings_defaults | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      no_log: true
+
+    - name: Show where each parameter comes from (not the values, which include passwords)
+      ansible.builtin.debug:
+        msg:
+          - "Given in this run: {{ metacheck_settings_given.keys() | list | join(', ') or 'none' }}"
+          - "Given at an earlier run: {{ metacheck_settings_stored.keys() | difference(metacheck_settings_given.keys()) | intersect(metacheck_settings_defaults.keys()) | join(', ') or 'none' }}"
+          - "The default: {{ metacheck_settings_defaults.keys() | difference(metacheck_settings_given.keys()) | difference(metacheck_settings_stored.keys()) | join(', ') or 'none' }}"
+
     - name: Shared first steps
       ansible.builtin.include_tasks: tasks/base.yml
 
@@ -1302,6 +1359,24 @@
         systemctl stop metacheck-playbook-hold 2>/dev/null || true
         rm -f /run/metacheck-playbook-hold.ok
       changed_when: false
+
+    # Only now, so a run that failed keeps the earlier parameters. The file is
+    # read again first: `metacheck-public on|off` above may have written to it.
+    - name: Read the parameters file again
+      ansible.builtin.slurp:
+        src: "{{ metacheck_settings_file }}"
+      register: metacheck_settings_file_now
+      no_log: true
+      failed_when: false
+
+    - name: Keep the parameters given in this run, for later runs (root only)
+      ansible.builtin.copy:
+        dest: "{{ metacheck_settings_file }}"
+        content: "{{ ((metacheck_settings_file_now.content | b64decode | from_json) if metacheck_settings_file_now.content is defined else {}) | combine(metacheck_settings_given) | to_nice_json }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
 
     - name: Update status file
       ansible.builtin.lineinfile:

@@ -14,6 +14,26 @@ HOST=$(hostname -f)
 
 state() { grep -q "This is the PUBLIC variant" "$DST" 2>/dev/null && echo open || echo closed; }
 
+# A later playbook run keeps this choice: it is the component parameter
+# metacheck_public in the playbook's parameters file (root only).
+remember() {
+  python3 -I - "$1" <<'PY'
+import json, os, sys
+f = "/etc/metacheck-settings.json"
+try:
+    with open(f) as fh:
+        s = json.load(fh)
+except (OSError, ValueError):
+    s = {}
+s["metacheck_public"] = sys.argv[1]
+tmp = f + ".tmp"
+with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+    json.dump(s, fh, indent=2)
+    fh.write("\n")
+os.replace(tmp, f)
+PY
+}
+
 use() {
   [ "$(id -u)" -eq 0 ] || { echo "Run as: sudo metacheck-public $1" >&2; exit 1; }
   [ -d /etc/nginx/app-location-conf.d ] || { echo "No SRC-Nginx on this workspace" >&2; exit 1; }
@@ -33,10 +53,12 @@ use() {
 case "${1:-status}" in
   on)
     use on public
+    remember true
     echo "The metacheck app is OPEN to anyone: https://$HOST/metacheck/"
     ;;
   off)
     use off login
+    remember false
     echo "The metacheck app needs the SRAM login again: https://$HOST/metacheck/"
     ;;
   status)
