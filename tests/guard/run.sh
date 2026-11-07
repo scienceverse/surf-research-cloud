@@ -5,7 +5,9 @@
 #
 #   tests/guard/run.sh /path/to/metacheck
 #
-# 1. capture.R loads that metacheck in its R image and calls its four Docker
+# 1. capture.R loads that metacheck in its R image, with the worker's own
+#    settings (.sandbox_options() in api/worker.R; it stops when a function of
+#    the worker runs code without them), and calls its four Docker
 #    functions (installing R and Python packages, running R and Python
 #    scripts, one in a folder "Analysis (final)"), with a stand-in docker
 #    (bin/docker) that records each command.
@@ -18,7 +20,7 @@ pkg=$(cd "$1" && pwd)
 here=$(cd "$(dirname "$0")" && pwd)
 guard=$(cd "$here/../../files/metacheck" && pwd)
 work=$(mktemp -d)
-cp -r "$here/bin" "$here/capture.R" "$here/replay.py" "$work/"
+cp -r "$here/bin" "$here/capture.R" "$here/replay.py" "$here/../../api/worker.R" "$work/"
 chmod +x "$work/bin/docker"
 mkdir -p "$work/srv"
 # Docker on Windows wants Windows paths

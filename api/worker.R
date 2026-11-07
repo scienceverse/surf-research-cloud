@@ -251,6 +251,19 @@ CODE_REPORT_MINUTES <- 10
        memory_gb = num("METACHECK_SANDBOX_MEMORY_MB", 16384) / 1024)
 }
 
+# metacheck's settings for the Docker sandbox, for every job that runs code
+# (do_repocheck() twice, .run_paper_code()). Set in one place: a place that
+# missed the user made every container of the PsyArXiv reports be refused.
+# The guard runs every container as 1000:1000 and refuses another user;
+# metacheck (0.4.3.7 and later) otherwise asks for the user running R on
+# Linux, here shiny. The packages go in a folder, not a Docker volume: the
+# guard refuses `docker volume` and mounts its own folder for the job instead.
+# tests/guard/capture.R takes this function from this file.
+.sandbox_options <- function() {
+  options(metacheck.docker_resource_limits = .sandbox_limits(),
+          metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)
+}
+
 # The repository check app's code, in its own environment: its report and
 # progress files, plus the limits, module list and .zip helpers defined in its
 # app.R (taken by name, without running the app itself).
@@ -367,8 +380,7 @@ do_repocheck <- function(job_dir, job) {
                                docker_use_declared_version = FALSE, timeout = 300)
         deadline <- .code_deadline(job_dir)
         if (!is.null(deadline)) margs$run_args$total_timeout <- deadline
-        options(metacheck.docker_resource_limits = .sandbox_limits(),
-                metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)  # see below
+        .sandbox_options()
         Sys.umask("000")   # see below: the sandbox's user writes into these folders
       }
       rc$use_shiny_progress()
@@ -398,12 +410,7 @@ do_repocheck <- function(job_dir, job) {
         docker_use_declared_version = FALSE, timeout = 300), code_place)
       deadline <- .code_deadline(job_dir)
       if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
-      # The guard runs every container as 1000:1000 and refuses another user;
-      # metacheck (0.4.3.7 and later) otherwise asks for the user running R
-      # on Linux. The packages go in a folder, not a Docker volume: the guard
-      # refuses `docker volume` and mounts its own folder for the job instead.
-      options(metacheck.docker_resource_limits = .sandbox_limits(),
-              metacheck.docker_user = "1000:1000", metacheck.docker_lib_volume = FALSE)
+      .sandbox_options()
       # The sandbox's user (an unused id on this server) must be able to write
       # into the folders metacheck makes for it; they lie inside this job's
       # own folder on the sandbox file system, which only this server's
@@ -448,8 +455,8 @@ do_repocheck <- function(job_dir, job) {
   progress <- file.path(job_dir, "progress.txt")
   on.exit(unlink(c(progress, file.path(job_dir, "cache")), recursive = TRUE), add = TRUE)
   options(shiny_progress_file = progress,
-          metacheck.repo_cache.dir = file.path(job_dir, "cache"),
-          metacheck.docker_resource_limits = .sandbox_limits())
+          metacheck.repo_cache.dir = file.path(job_dir, "cache"))
+  .sandbox_options()
   Sys.umask("000")   # see do_repocheck(): the sandbox's user writes into these folders
   labels <- vapply(modules, function(m) {
     tryCatch(metacheck::module_info(m)$title, error = function(e) m) %||% m
