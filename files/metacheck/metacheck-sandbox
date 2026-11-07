@@ -71,7 +71,20 @@ IMAGES = {
     "ghcr.io/scienceverse/metacheck_r_large:latest": "ghcr.io/scienceverse/metacheck_r_large:latest",
     "ghcr.io/scienceverse/metacheck_py_large:latest": "ghcr.io/scienceverse/metacheck_py_large:latest",
     "ghcr.io/scienceverse/metacheck_py_small:latest": "ghcr.io/scienceverse/metacheck_py_large:latest",
+    # Code written for Python 2 (metacheck 0.4.3, #568): the official Python 2.7
+    # image. It gets no fixes since 2020; the code still runs without network,
+    # read-only, without privileges and as a remapped user.
+    "python:2.7-slim": "python:2.7-slim",
 }
+PY2_IMAGES = {"python:2.7-slim"}
+
+
+def lib_kind(target, image):
+    """The guard's package folder for a mount target: Python 2's packages
+    (metacheck's _pylib2, also mounted at /pylib) are kept apart from Python
+    3's, which they would otherwise share."""
+    kind = LIB_TARGETS[target]
+    return "py2" if kind == "py" and image in PY2_IMAGES else kind
 COMMANDS = {"Rscript", "python"}
 # target -> the modes metacheck may ask for. The packages folders are writable
 # when metacheck asks (it does since 0.4.3): a package can keep data in its own
@@ -390,7 +403,7 @@ def check_run(job, args):
         # the packages installed for this job, from the guard's own folder
         # (see lib_dir()), instead of the folder metacheck made for them
         if target in LIB_TARGETS:
-            src = lib_dir(job, LIB_TARGETS[target])
+            src = lib_dir(job, lib_kind(target, image))
         cmd += ["-v", "%s:%s:%s" % (src, target, mode)]
     for e in env:
         cmd += ["-e", e]
@@ -522,27 +535,44 @@ def r_install_script(request):
 
 
 def py_install_script(out_file, request):
-    """The guard's install script for Python packages."""
+    """The guard's install script for Python packages. It runs in Python 3 and
+    in Python 2.7 (python:2.7-slim), which has neither importlib.metadata nor
+    subprocess.run."""
     return "\n".join([
         "import json, subprocess, sys",
-        "from importlib import metadata",
+        "try:",
+        "    from importlib import metadata",
+        "    def installed(pkg):",
+        "        try:",
+        "            metadata.version(pkg)",
+        "            return True",
+        "        except metadata.PackageNotFoundError:",
+        "            return False",
+        "except ImportError:  # Python 2",
+        "    import pkg_resources",
+        "    def installed(pkg):",
+        "        try:",
+        "            pkg_resources.get_distribution(pkg)",
+        "            return True",
+        "        except pkg_resources.DistributionNotFound:",
+        "            return False",
         "OUT = %r" % out_file,
         "REQUESTS = %r" % (request,),
         "open(OUT, 'w').close()",
         "for pkg, src, req in REQUESTS:",
         "    if req is None:",
         "        ok, msg = False, %r" % PY_PYPI_ONLY,
+        "    elif installed(pkg):",
+        "        ok, msg = True, ''",
         "    else:",
-        "        try:",
-        "            metadata.version(pkg)",
-        "            ok, msg = True, ''",
-        "        except metadata.PackageNotFoundError:",
-        "            p = subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', '--no-input',",
-        "                                '--disable-pip-version-check', '--no-cache-dir',",
-        "                                '--only-binary', ':all:', '--target', '/pylib', req],",
-        "                               capture_output=True, text=True)",
-        "            ok = p.returncode == 0",
-        "            msg = '' if ok else ' '.join(p.stderr.split())[-1000:]",
+        "        p = subprocess.Popen([sys.executable, '-m', 'pip', 'install', '--quiet', '--no-input',",
+        "                              '--disable-pip-version-check', '--no-cache-dir',",
+        "                              '--only-binary', ':all:', '--target', '/pylib', req],",
+        "                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,",
+        "                             universal_newlines=True)",
+        "        err = p.communicate()[1]",
+        "        ok = p.returncode == 0",
+        "        msg = '' if ok else ' '.join(err.split())[-1000:]",
         "    with open(OUT, 'a') as fh:",
         "        fh.write(json.dumps({'package': pkg, 'source': src, 'installed': ok, 'message': msg}) + '\\n')",
         ""])
@@ -607,7 +637,7 @@ def check_install(job, args):
            "-e", "HOME=/tmp",
            "-w", "/sandbox",
            "-v", "%s:/sandbox:rw" % mounts["/sandbox"][0],
-           "-v", "%s:%s:rw" % (lib_dir(job, kind), target),
+           "-v", "%s:%s:rw" % (lib_dir(job, lib_kind(target, image)), target),
            "-v", "%s:/install:ro" % folder,
            IMAGES[image]] + run
     return cmd, folder

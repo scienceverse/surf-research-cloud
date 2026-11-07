@@ -32,6 +32,19 @@ docker run --rm -v "$(p "$pkg"):/pkg:ro" -v "$(p "$work"):/out" -v "$(p "$work/s
 status=0
 docker run --rm -v "$(p "$guard"):/guard:ro" -v "$(p "$work"):/out" -v "$(p "$work/srv"):/srv/metacheck-sandbox" \
   python:3.12-slim python /out/replay.py || status=$?
+# 3. The guard's own Python install script (written by replay.py), run with the
+#    internet in Python 2.7 and 3: six is installed, a package PyPI does not
+#    have and one from GitHub are not.
+for img in python:2.7-slim python:3.12-slim; do
+  docker run --rm -v "$(p "$work"):/out" "$img" sh -c '
+    mkdir -p /pylib && python /out/install_guard.py && python -c "
+import json
+r = dict((d[\"package\"], d[\"installed\"]) for d in map(json.loads, open(\"/out/guard_install.jsonl\")))
+ok = r == {\"six\": True, \"no-such-package-mc-test\": False, \"frompgithub\": False}
+print(\"install script: %s %s\" % (\"ok\" if ok else \"WRONG\", r))
+raise SystemExit(0 if ok else 1)
+"' && echo "  ($img)" || { echo "install script failed in $img"; status=1; }
+done
 # the containers' files belong to root: removed by a container
 docker run --rm -v "$(p "$work"):/w" python:3.12-slim sh -c 'rm -rf /w/* /w/.[!.]*'
 rm -rf "$work"
