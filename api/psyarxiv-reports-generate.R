@@ -128,12 +128,17 @@ failure_page <- function(out, p, first, second) {
     "</body></html>"), out, useBytes = TRUE)
 }
 
-for (p in newest) {
+# One preprint's report, unless it has one for its current version or its
+# report was deleted. `older`: a preprint from before the newest (see below),
+# which Discord hears about as such. Returns "skipped" (nothing to do),
+# "later" (the server was busy; tried again at the next run) or "made" (a
+# report, or the page saying the check failed).
+report_one <- function(p, older = FALSE) {
   id <- p$id
   meta_file <- file.path(DIR, "reports", paste0(id, ".json"))
-  if (file.exists(file.path(DIR, "deleted", paste0(id, ".json")))) next
+  if (file.exists(file.path(DIR, "deleted", paste0(id, ".json")))) return("skipped")
   if (file.exists(meta_file) &&
-      identical(as.integer(jsonlite::read_json(meta_file)$version), as.integer(p$version))) next
+      identical(as.integer(jsonlite::read_json(meta_file)$version), as.integer(p$version))) return("skipped")
   t0 <- Sys.time()
   out <- file.path(DIR, "reports", paste0(id, ".html"))
   part <- paste0(out, ".part")   # replaces the report only when this run has one
@@ -162,7 +167,7 @@ for (p in newest) {
   if (!r$ok && transient(r$error)) {
     unlink(part)
     log(id, " v", p$version, ": not now, trying again at the next run: ", r$error, " (", mins(), " min)")
-    next
+    return("later")
   }
   # 3. both failed: a page that says so, so that this version is not tried again
   if (!r$ok) {
@@ -181,22 +186,70 @@ for (p in newest) {
     metacheck_version = as.character(utils::packageVersion("metacheck")),
     outcome = outcome, errors = c(first, if (!r$ok) r$error),
     modules = used), meta_file, auto_unbox = TRUE, pretty = TRUE)
-  log(id, " v", p$version, ": ", outcome,
+  log(id, " v", p$version, ": ", outcome, if (older) " (older preprint)",
       if (length(first)) paste0(" (full check: ", first, ")"),
       if (!r$ok) paste0(" (second try: ", r$error, ")"), " (", mins(), " min)")
+  what <- if (older) "an older PsyArXiv preprint" else "a new PsyArXiv preprint"
   if (identical(outcome, "full")) {
-    notify(sprintf("metacheck made a report on a new PsyArXiv preprint: **%s** (version %s)\n%s\n%s",
-                   title, p$version, link, took()))
+    notify(sprintf("metacheck made a report on %s: **%s** (version %s)
+%s
+%s",
+                   what, title, p$version, link, took()))
   } else if (identical(outcome, "without_repository_checks")) {
-    notify(sprintf(paste0("metacheck made a report on a new PsyArXiv preprint: **%s** (version %s), ",
+    notify(sprintf(paste0("metacheck made a report on %s: **%s** (version %s), ",
                           "but without checking its data and code repositories, because the check ",
-                          "with them failed: %s\n%s\n%s"),
-                   title, p$version, first, link, took()))
+                          "with them failed: %s
+%s
+%s"),
+                   what, title, p$version, first, link, took()))
   } else {
-    notify(sprintf(paste0("metacheck could not make a report on the new PsyArXiv preprint **%s** ",
-                          "(version %s). Its report page now says the automated check failed.\n%s\n",
-                          "Reason for the full check: %s\n",
+    notify(sprintf(paste0("metacheck could not make a report on %s **%s** ",
+                          "(version %s). Its report page now says the automated check failed.
+%s
+",
+                          "Reason for the full check: %s
+",
                           "Reason for the check without the data and code repositories: %s"),
-                   title, p$version, link, first %||% "-", r$error))
+                   what, title, p$version, link, first %||% "-", r$error))
+  }
+  "made"
+}
+
+done <- vapply(newest, report_one, "")
+
+
+# Older preprints: when none of the newest needed a report, one older preprint
+# without one, going back PSYARXIV_REPORTS_BACK_DAYS days by the date of its
+# current version ("0" = off). PsyArXiv's list is paged back 100 at a time,
+# from the page the previous run got to (kept in older.json), one page
+# earlier, as new preprints push the list on. Not when PsyArXiv did not answer
+# or with PSYARXIV_REPORTS_ONLY.
+BACK_DAYS <- as.integer(Sys.getenv("PSYARXIV_REPORTS_BACK_DAYS", "0"))
+if (!is.na(BACK_DAYS) && BACK_DAYS > 0 && !length(only) && length(newest) && all(done == "skipped")) {
+  state_file <- file.path(DIR, "older.json")
+  page <- if (file.exists(state_file)) {
+    tryCatch(as.integer(jsonlite::read_json(state_file)$page), error = function(e) NA_integer_)
+  } else NA_integer_
+  page <- if (is.na(page)) 1L else max(1L, page - 1L)
+  limit <- Sys.Date() - BACK_DAYS
+  repeat {
+    res <- tryCatch(get_json(sprintf("%s/preprints?sort=newest&per_page=100&page=%d", PSY, page))$results,
+                    error = function(e) {
+                      log("older preprints: PsyArXiv did not answer: ", conditionMessage(e))
+                      NULL
+                    })
+    if (!length(res)) break
+    jsonlite::write_json(list(page = page), state_file, auto_unbox = TRUE)
+    posted <- as.Date(substr(vapply(res, function(p) p$versionPostedAt %||% "", ""), 1, 10),
+                      format = "%Y-%m-%d")
+    too_old <- !is.na(posted) & posted < limit
+    outcome <- "skipped"
+    for (p in res[!too_old]) {
+      outcome <- report_one(p, older = TRUE)
+      if (outcome != "skipped") break
+    }
+    # a report made (or the server busy), or every preprint back to the limit has one
+    if (outcome != "skipped" || any(too_old)) break
+    page <- page + 1L
   }
 }

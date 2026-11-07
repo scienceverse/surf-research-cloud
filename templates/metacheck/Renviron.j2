@@ -97,9 +97,11 @@ METACHECK_STATE_DIR=/var/lib/metacheck-state
 {% endif %}
 
 # PsyArXiv reports (prototype; api/psyarxiv_reports.R): the folder, how many
-# newest preprints get a report, and the key of the delete links.
+# newest preprints get a report, how many days back older preprints get one,
+# and the key of the delete links.
 PSYARXIV_REPORTS_DIR={{ metacheck_psyarxiv_reports_dir }}
 PSYARXIV_REPORTS_NEWEST={{ metacheck_psyarxiv_reports }}
+PSYARXIV_REPORTS_BACK_DAYS={{ metacheck_psyarxiv_reports_back_days }}
 PSYARXIV_REPORTS_SECRET={{ psyarxiv_reports_secret.stdout }}
 
 # This workspace's public address, for links in messages.

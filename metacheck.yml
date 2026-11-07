@@ -101,8 +101,11 @@
     # PsyArXiv reports (prototype): every hour, a checklist report for each of
     # this many newest PsyArXiv preprints that has none yet, shown at
     # /psyarxiv-reports/?id=<id> with a "report a mistake" button; "0" = off.
-    # See api/psyarxiv_reports.R.
-    metacheck_psyarxiv_reports: "10"
+    # See api/psyarxiv_reports.R. Switched off for now ("0"): no reports are made.
+    metacheck_psyarxiv_reports: "0"
+    # When none of the newest needs a report, one older preprint without one
+    # per run, going back this many days; "0" = only the newest.
+    metacheck_psyarxiv_reports_back_days: "730"
     # How many web interface jobs run at a time, each in its own R process;
     # the others wait in the queue.
     metacheck_api_workers: "2"

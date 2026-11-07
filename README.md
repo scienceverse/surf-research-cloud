@@ -208,6 +208,15 @@ at a time, and keeps it in
 `<storage volume>/psyarxiv-reports/reports/<id>.html` with the preprint's details in
 `<id>.json`. `metacheck_psyarxiv_reports: "0"` switches it off.
 
+When none of the newest preprints needs a report, the run makes one for an older
+preprint instead: the newest one without a report, going back
+`metacheck_psyarxiv_reports_back_days` (default 730, two years) by the date of its
+current version; `"0"` keeps to the newest. One older preprint per run, so new
+preprints still come first at the next run. The script pages back through
+PsyArXiv's list 100 preprints at a time and keeps the page it got to in
+`<storage volume>/psyarxiv-reports/older.json`. Discord hears of these as reports on
+an older preprint.
+
 When the full report fails, for example because a repository is so large that the
 repository checks do not finish within the job's hour, a second try leaves out the
 repository checks (`repo_check`, `code_check`, `data_check`, `codebook_check`) and
@@ -932,6 +941,7 @@ and `auto` means "decide on the workspace".
 | `metacheck_llm_first_name` | `none` | with `metacheck_llm_first_url`: the name the app shows for that server; `none` = its host name |
 | `metacheck_discord_webhook` | `keep` | a Discord channel's webhook for messages about PsyArXiv reports and server problems (see "Messages to Discord"); `keep` = the one stored before, `none` = none |
 | `metacheck_github_pat`, `metacheck_osf_pat`, `metacheck_dryad_client_id`, `metacheck_dryad_client_secret`, `metacheck_researchbox_api_key`, `metacheck_gitlab_pat`, `metacheck_openalex_api_key` | `keep` | API keys for the data repositories and OpenAlex (see "API keys for the data repositories"); `keep` = the one stored before, `none` = none |
+| `metacheck_psyarxiv_reports_back_days` | `730` | when none of the newest PsyArXiv preprints needs a report, one older preprint without one per run, going back this many days (see "PsyArXiv reports"); `0` = only the newest |
 | `metacheck_api_workers` | `2` | web interface jobs at a time; the others wait in the queue |
 | `metacheck_sandbox_cpus` | `auto` | processors one job's code may use in the sandbox; `auto` = 4, or fewer when the workspace has fewer |
 | `metacheck_sandbox_memory` | `auto` | memory one job's code may use, such as `8G` or `6000M`; `auto` = 16G, or less: the workspace's memory minus 4G, shared among `metacheck_api_workers` jobs |
