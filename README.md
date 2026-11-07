@@ -912,6 +912,30 @@ how .NET and PowerShell send it.
 All values are strings. SRC does not allow empty values, so `none` means "not set"
 and `auto` means "decide on the workspace".
 
+**metacheck.yml keeps its parameters.** Each parameter given to a run is kept in
+`/etc/metacheck-settings.json` (root only; it holds passwords and keys), and a
+later run uses, for each parameter, the value given in that run, else the value
+given at an earlier run, else the default in `metacheck_settings_defaults`. So a
+run without parameters, such as one by hand to install a change to this
+repository, leaves the workspace as it was set up:
+
+```
+cd ~/surf-research-cloud && git pull
+sudo ~/ansible-env/bin/ansible-playbook --connection=local -i localhost, -b metacheck.yml
+```
+
+A run first lists which parameters were given now, which at an earlier run, and
+which have their default (not their values). Only given parameters are kept, so a
+changed default in this repository still reaches a workspace where that parameter
+was never given. To change one, give it (`-e metacheck_public=false`); to return to
+the default, give the default's value. The file is written only when the run
+succeeds. `sudo metacheck-public on|off` writes `metacheck_public` there too. The
+data repositories' keys and the Discord webhook keep their own files, as before
+(`keep`). Before this (November 2026) nothing was kept: a run without the
+parameters of the first installation set them back to their defaults, which
+would have turned off the local GROBID, the model on the processors, SPIKE-1 and
+public access on the server.
+
 ### bibr
 
 | Key | Default | Meaning |
