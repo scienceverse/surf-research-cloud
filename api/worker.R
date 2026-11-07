@@ -603,6 +603,13 @@ do_job <- function(job_dir, keys = list()) {
     paper <- tryCatch(bibr_read(json), error = function(e) {
       stop("The file could not be read as bibr JSON (", conditionMessage(e), ").", call. = FALSE)
     })
+    # the paper as converted, for a check that asks for it (`paper`): the file
+    # itself, byte for byte, put into the result unchanged
+    paper_json <- if (isTRUE(job$paper) && job$kind == "check") {
+      x <- readChar(json, file.size(json), useBytes = TRUE)
+      Encoding(x) <- "UTF-8"
+      x
+    }
     unlink(json)                                      # the upload/conversion is read
     # read() accepts any JSON; a file without a paper gives one without an id,
     # on which every module fails with an unclear message.
@@ -688,7 +695,9 @@ do_job <- function(job_dir, keys = list()) {
         modules = results,
         report_html = html
       )
-      writeLines(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null", na = "null", digits = NA),
+      if (!is.null(paper_json)) out$paper <- structure(paper_json, class = "json")
+      writeLines(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null", na = "null", digits = NA,
+                                  json_verbatim = TRUE),
                  file.path(job_dir, "result.json"), useBytes = TRUE)
       type <- "application/json"
     }

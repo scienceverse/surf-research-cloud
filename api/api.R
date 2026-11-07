@@ -582,7 +582,8 @@ later::later(.scheduler, 1)
                             human_participants = .parse_answer(up$fields$human_participants),
                             source = if (identical(up$fields$source, "website")) "website" else "code",
                             visitor = .visitor_code(req),
-                            report = .parse_flag(up$fields$report)),
+                            report = .parse_flag(up$fields$report),
+                            paper = .parse_flag(up$fields$paper)),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
   keys <- .parse_keys(up$fields)
   if (length(keys)) assign(id, keys, envir = job_keys)
@@ -784,6 +785,7 @@ function() {
 #* @param modules Comma-separated module names (optional; see GET /modules); for repocheck, one installed module to run on the .zip or link instead (see `installed` in GET /modules)
 #* @param human_participants repocheck with an installed module: "true" or "false" when you know whether people took part or personal data was used (optional)
 #* @param report "true" to include the HTML report in a check result (optional)
+#* @param paper "true" to include the paper as converted (bibr JSON: its full text, sections, references, tables, ...) in a check result, as `paper` (optional, default false)
 #* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...) instead of the full (paper) or brief (repository) report
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
@@ -844,6 +846,7 @@ function(req, res) .one_call(req, res, "report")
 #* @param crossref "true" to let bibr complete the references through Crossref (sends the reference list to Crossref; default false)
 #* @param run_code "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @param report "true" to include the HTML report as report_html (optional, default false)
+#* @param paper "true" to include the paper as converted (bibr JSON: its full text, sections, references, tables, ...) as `paper` (optional, default false)
 function(req, res) .one_call(req, res, "check")
 
 #* Convert a PDF to bibr JSON, in one call
