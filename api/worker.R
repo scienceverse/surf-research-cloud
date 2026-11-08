@@ -682,15 +682,19 @@ do_job <- function(job_dir, keys = list()) {
       # each module's output, with the fields metacheck's checklist report
       # also reads (report-checklist.R: checks, checklist_section, intro, and
       # repo_check's naming_issues and useless_files for the file tree), so a
-      # page can show the checklist report from this JSON; those fields only
-      # when a module gives them
+      # page can show the checklist report from this JSON; and data_check's
+      # findings (one row per problem with a file, a column or a sheet) and
+      # careless (the respondents flagged for careless responding), which its
+      # report shows only as a table in the text. Those fields only when a
+      # module gives them
       results <- lapply(full, function(r) json_safe(c(
         list(module = r$module, title = r$title, traffic_light = r$traffic_light,
              summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
              section = r$section, report = r$report),
         Filter(Negate(is.null), list(
           checks = r$checks, checklist_section = r$checklist_section, intro = r$intro,
-          naming_issues = r$naming_issues, useless_files = r$useless_files)))))
+          naming_issues = r$naming_issues, useless_files = r$useless_files,
+          findings = r$findings, careless = r$careless)))))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
         # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
