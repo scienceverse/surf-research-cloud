@@ -9,5 +9,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/metacheck-auto-update
-# waiting for jobs (at most WAIT_MINUTES) plus the install
-TimeoutStartSec=90min
+# draining (at most DRAIN_MAX_MINUTES, 65) plus the install
+TimeoutStartSec=120min

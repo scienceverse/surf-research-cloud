@@ -48,6 +48,12 @@ MAX_WORKERS <- as.integer(Sys.getenv("METACHECK_API_WORKERS", "2"))
 MAX_WAITING <- 20L                  # queued jobs; more are refused (HTTP 503)
 RESULT_KEEP_MINUTES <- as.numeric(Sys.getenv("METACHECK_API_KEEP_MINUTES", "60"))
 JOB_TIMEOUT_MINUTES <- 30
+# While this file exists, no queued job is started: new jobs are still taken
+# and wait, running ones finish. metacheck-auto-update makes it before an
+# update and removes it when done, so an update does not have to wait for a
+# moment without any job, which a steady stream of jobs never leaves. In
+# /run, which is emptied at every boot, so the service is never left drained.
+DRAIN_FILE <- Sys.getenv("METACHECK_API_DRAIN_FILE", "/run/metacheck-api.drain")
 # Running a repository's code (metacheck's reproducibility check) in the
 # Docker sandbox set up by the playbook (tasks/sandbox.yml): only when the
 # playbook found everything in place (METACHECK_SANDBOX=on).
@@ -311,9 +317,10 @@ running <- new.env()          # job id -> callr process
         }
       }
     }
-    # start queued jobs, oldest first
+    # start queued jobs, oldest first; none while an update drains the
+    # service (DRAIN_FILE)
     free <- MAX_WORKERS - length(ls(running))
-    if (free > 0) for (id in head(.queued_ids(), free)) .start_worker(id)
+    if (free > 0 && !file.exists(DRAIN_FILE)) for (id in head(.queued_ids(), free)) .start_worker(id)
     # delete finished jobs after RESULT_KEEP_MINUTES
     for (id in list.dirs(JOBS_DIR, full.names = FALSE, recursive = FALSE)) {
       st <- .read_status(id)
@@ -702,6 +709,9 @@ function() {
   list(status = "ok", bibr = .bibr_ready_cached(),
        metacheck_version = as.character(utils::packageVersion("metacheck")),
        jobs_running = length(ls(running)), jobs_waiting = length(.queued_ids()),
+       # TRUE while an update waits for the running jobs to end; queued jobs
+       # start after it
+       draining = file.exists(DRAIN_FILE),
        run_code = SANDBOX_ON,
        # where a PDF goes when bibr cannot convert it: "local" (GROBID on this
        # server), "remote" (another GROBID server) or "none"; the website
