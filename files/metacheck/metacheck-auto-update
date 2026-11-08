@@ -5,9 +5,10 @@
 #
 # When the branch metacheck is installed from (metacheck_ref, "dev") or an
 # installed module has a newer commit on GitHub, it
-#   1. waits until the web interface has no running or waiting job (a job's
-#      R process stops with the web interface), at most WAIT_MINUTES, else
-#      it tries again at the next run;
+#   1. drains the web interface: it makes DRAIN_FILE, so no queued job
+#      starts (new ones still wait in the queue), and waits until no job runs
+#      (a job's R process stops with the web interface), at most
+#      DRAIN_MAX_MINUTES, longer than any job may run;
 #   2. stops the web interface, so no job starts during the install;
 #   3. installs with the playbook's own scripts (install-metacheck.R,
 #      install-modules.R, fetch-api-helpers.sh);
@@ -69,22 +70,34 @@ fi
 if ! $mc_new && ! $mod_new && ! $FORCE; then exit 0; fi
 log "new on GitHub: metacheck $mc_new (${mc_installed:0:10} -> ${mc_remote:0:10}), modules $mod_new"
 
-# 1. wait until no job runs or waits
+# 1. drain: no queued job starts (the web interface reads DRAIN_FILE), new
+# jobs still wait in the queue, and the running ones finish. Waiting for a
+# moment without any job never came while jobs kept arriving (8 November
+# 2026: the update to 0.4.3.13 waited for hours). The wait is bounded: the
+# web interface stops a job that runs longer than its time limit (60 minutes
+# at most), so DRAIN_MAX_MINUTES is a little more than that. The drain file is
+# removed however this script ends.
+DRAIN_FILE="${DRAIN_FILE:-/run/metacheck-api.drain}"
+DRAIN_MAX_MINUTES="${DRAIN_MAX_MINUTES:-65}"
+trap 'rm -f "$DRAIN_FILE"' EXIT
 health() { curl -fsS --max-time 10 "http://127.0.0.1:$API_PORT/health" 2>/dev/null; }
-busy() {
+running() {
   local h
   h=$(health) || { echo 0; return; }   # not answering: nothing to protect
-  echo "$h" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(int(d.get("jobs_running", 0)) + int(d.get("jobs_waiting", 0)))' 2>/dev/null || echo 0
+  echo "$h" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(int(d.get("jobs_running", 0)))' 2>/dev/null || echo 0
 }
 if ! $FORCE; then
+  touch "$DRAIN_FILE"
+  log "draining: no queued job starts until the update is done; waiting for $(running) running job(s)"
   waited=0
-  while [ "$(busy)" != "0" ]; do
-    if [ "$waited" -ge "$((WAIT_MINUTES * 60))" ]; then
-      log "jobs still running or waiting after $WAIT_MINUTES minutes; trying again at the next run"
-      exit 0
+  while [ "$(running)" != "0" ]; do
+    if [ "$waited" -ge "$((DRAIN_MAX_MINUTES * 60))" ]; then
+      log "jobs still running after $DRAIN_MAX_MINUTES minutes (longer than any job's time limit); updating anyway"
+      break
     fi
     sleep 30; waited=$((waited + 30))
   done
+  log "no job running after $((waited / 60)) minute(s)"
 fi
 
 # 2. no new job may start during the install
@@ -110,7 +123,8 @@ if [ -n "${METACHECK_MODULES// /}" ] && [ "$METACHECK_MODULES" != "none" ]; then
     || { log "updating the modules failed"; ok=false; }
 fi
 
-# 4. start again and check
+# 4. start again and check; the queued jobs start (no drain file)
+rm -f "$DRAIN_FILE"
 systemctl start metacheck-api
 if $mc_new || $FORCE; then systemctl restart shiny-server; fi
 for _ in $(seq 1 60); do

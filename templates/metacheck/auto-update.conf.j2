@@ -6,5 +6,8 @@ METACHECK_MODULES="{{ metacheck_modules }}"
 METACHECK_MODULES_DIR="{{ metacheck_modules_dir }}"
 COMPONENT_DIR="{{ metacheck_component_dir }}"
 API_PORT="{{ metacheck_api_port }}"
-# how long to wait for running and waiting jobs before trying again later
-WAIT_MINUTES=30
+# During an update no queued job starts (the web interface reads this file);
+# the update waits for the running jobs, at most DRAIN_MAX_MINUTES: a job
+# that runs code may take 60 minutes before the web interface stops it.
+DRAIN_FILE=/run/metacheck-api.drain
+DRAIN_MAX_MINUTES=65
