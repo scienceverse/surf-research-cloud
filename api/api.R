@@ -68,6 +68,15 @@ METACHECK_LOCAL <- identical(tolower(Sys.getenv("METACHECK_LOCAL")), "true")
 SANDBOX_ROOT <- "/srv/metacheck-sandbox"
 SANDBOX_BIN <- Sys.getenv("METACHECK_SANDBOX_BIN", "/opt/metacheck-component/sandbox-bin")
 SANDBOX_TIMEOUT_MINUTES <- 60       # a job that runs code may take longer
+# A job that runs code is stopped only this long after SANDBOX_TIMEOUT_MINUTES.
+# Its code must be done 10 minutes before that limit (worker.R,
+# CODE_REPORT_MINUTES), so the checks after it and the report have that time and
+# this margin as well: a job stopped here returns nothing at all, not even the
+# report on what did run. On 12 November 2026 a medRxiv preprint with 10,658
+# files in its repositories was stopped at 60 minutes, 3 minutes after its code
+# check ended, before its report; 23 of the 29 PsyArXiv preprints that failed
+# on the server had failed the same way.
+JOB_GRACE_MINUTES <- 10
 MAX_UPLOAD_BYTES <- 50 * 1024^2     # PDF or bibr JSON
 MAX_ZIP_BYTES <- 500 * 1024^2       # .zip of a data/code folder (as metacheck's repocheck app)
 MIN_FREE_DISK_MB <- 10000           # refuse new jobs when less is free (as the repocheck app)
@@ -278,7 +287,7 @@ running <- new.env()          # job id -> callr process
 }
 
 .job_timeout <- function(id) {
-  if (isTRUE(.read_job(id)$run_code)) SANDBOX_TIMEOUT_MINUTES else JOB_TIMEOUT_MINUTES
+  if (isTRUE(.read_job(id)$run_code)) SANDBOX_TIMEOUT_MINUTES + JOB_GRACE_MINUTES else JOB_TIMEOUT_MINUTES
 }
 
 .read_job <- function(id) {

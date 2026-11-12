@@ -274,7 +274,12 @@ script may run 5 minutes, a job 60 minutes. All scripts together must be done 10
 minutes before the job's limit (`total_timeout` as a clock time, metacheck 0.4.1.5
 and later; `CODE_REPORT_MINUTES` in `api/worker.R`): then a running script is
 stopped and the rest are not started, so the report still comes back with what
-ran. Packages the images lack are installed
+ran. From metacheck 0.4.3.28 on, the copying of the repository and the installing
+of packages keep to that time too, and when the checks before it leave less than
+15 minutes, the code is not copied, installed or run at all; the report says so.
+The server itself stops a job only 10 minutes after its limit
+(`JOB_GRACE_MINUTES` in `api/api.R`, so at 70 minutes), because a job it stops
+returns nothing, not even the report on what did run. Packages the images lack are installed
 first (`install_missing = TRUE`), in a container of their own: the only container
 with the network, running only the guard's own install script, for packages from
 CRAN (ready built, from Posit's package manager) and PyPI (wheels only). Packages
