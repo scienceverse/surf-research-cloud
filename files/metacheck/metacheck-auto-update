@@ -74,11 +74,12 @@ log "new on GitHub: metacheck $mc_new (${mc_installed:0:10} -> ${mc_remote:0:10}
 # jobs still wait in the queue, and the running ones finish. Waiting for a
 # moment without any job never came while jobs kept arriving (8 November
 # 2026: the update to 0.4.3.13 waited for hours). The wait is bounded: the
-# web interface stops a job that runs longer than its time limit (60 minutes
-# at most), so DRAIN_MAX_MINUTES is a little more than that. The drain file is
+# web interface stops a job that runs longer than its time limit (70 minutes
+# at most: 60, and JOB_GRACE_MINUTES for its report, api/api.R), so
+# DRAIN_MAX_MINUTES is a little more than that. The drain file is
 # removed however this script ends.
 DRAIN_FILE="${DRAIN_FILE:-/run/metacheck-api.drain}"
-DRAIN_MAX_MINUTES="${DRAIN_MAX_MINUTES:-65}"
+DRAIN_MAX_MINUTES="${DRAIN_MAX_MINUTES:-75}"
 trap 'rm -f "$DRAIN_FILE"' EXIT
 health() { curl -fsS --max-time 10 "http://127.0.0.1:$API_PORT/health" 2>/dev/null; }
 running() {
