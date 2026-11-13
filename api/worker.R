@@ -9,6 +9,7 @@
 #   progress.txt  a folder check's progress, written by metacheck's progress code
 #   status.json   written here: status, step, timestamps, error
 #   result.html / result.json   the result (deleted later by api.R)
+#   files.zip     for a check with keep_files: the downloaded and run files (deleted with the result)
 #
 # Uses metacheck's API helper code (metacheck-plumber/utils) and the app's
 # bibr client, like the rest of the interface. A folder check (repocheck) uses
@@ -440,7 +441,11 @@ do_repocheck <- function(job_dir, job) {
 # prints with those in the paper. Run as one chain (report_module_run), so
 # each module gets the results of the ones before it; progress through
 # metacheck's progress code, as in the repository check.
-.run_paper_code <- function(paper, modules, job_dir) {
+#
+# `keep_files`: also keep the files the modules downloaded and the folders the
+# code ran in, as files.zip (.zip_job_files()); the sandbox folder they are in
+# is deleted when the job ends (api.R, .sandbox_cleanup()).
+.run_paper_code <- function(paper, modules, job_dir, keep_files = FALSE) {
   rc <- .repocheck_env()
   chain <- c("repo_check", "code_check", "data_check", "reproducibility_check")
   modules <- c(setdiff(modules, chain), chain)
@@ -449,7 +454,9 @@ do_repocheck <- function(job_dir, job) {
     code_check = fetch, data_check = fetch,
     reproducibility_check = c(list(
       execute = TRUE, sandbox = .code_sandbox(), install_missing = TRUE,
-      docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE), fetch))
+      docker_use_declared_version = FALSE, timeout = 300, local_only = FALSE,
+      keep_sandbox = isTRUE(keep_files)), fetch))
+  if (isTRUE(keep_files)) on.exit(.zip_job_files(job_dir), add = TRUE)
   deadline <- .code_deadline(job_dir)
   if (!is.null(deadline)) args$reproducibility_check$total_timeout <- deadline
   progress <- file.path(job_dir, "progress.txt")
@@ -465,6 +472,74 @@ do_repocheck <- function(job_dir, job) {
   rc$use_shiny_progress()
   rc$shiny_progress_modules(stats::setNames(labels, modules), from = 0.1, to = 0.9)
   metacheck::report_module_run(paper, modules, args)
+}
+
+# files.zip for a check with `keep_files` (.run_paper_code()): what the modules
+# downloaded from the paper's repositories, as downloaded/<repository>/...
+# (metacheck's session folder of downloads, and the lasting cache when a module
+# used it), and each folder the reproducibility check ran the code in, with the
+# files the code made, as run/<n>/... (its repro_sandbox_ folders, kept with
+# keep_sandbox), without the packages installed for the run (_lib, _pylib,
+# _pylib2). The folders are moved into one folder first (all in R's temporary
+# folder, on the sandbox file system), not linked: zip stores a link the code
+# made as a link (-y), so it cannot pull in files from elsewhere on the server.
+# Files the code made unreadable are left out. The result goes in status.json
+# as `files`: "kept" (with its size), "none", "too large" or "failed".
+# Never stops the job: the report does not depend on it.
+MAX_KEEP_FILES_MB <- 1024   # the zip, and the files before zipping at most 3 times that
+# zipping comes after the code, within the 10 minutes the job keeps for its
+# report (CODE_REPORT_MINUTES), so it may take at most 4 of them
+KEEP_FILES_ZIP_SECONDS <- 240
+.zip_job_files <- function(job_dir) {
+  out <- file.path(job_dir, "files.zip")
+  info <- tryCatch({
+    .set_status(job_dir, step = "keeping the downloaded files")
+    stage <- file.path(tempdir(), "keep_files")
+    dir.create(file.path(stage, "run"), recursive = TRUE, showWarnings = FALSE)
+    dl <- getOption("metacheck.repo_cache.session_dir", file.path(tempdir(), "metacheck-repo-files"))
+    if (dir.exists(dl)) file.rename(dl, file.path(stage, "downloaded"))
+    cache <- file.path(job_dir, "cache")
+    if (length(list.files(cache))) {
+      dir.create(file.path(stage, "downloaded"), showWarnings = FALSE)
+      file.copy(list.files(cache, full.names = TRUE), file.path(stage, "downloaded"),
+                recursive = TRUE)
+    }
+    runs <- list.files(tempdir(), pattern = "^repro_sandbox_", full.names = TRUE)
+    for (i in seq_along(runs)) file.rename(runs[i], file.path(stage, "run", i))
+    # find and du do not follow links (list.files() would)
+    excl <- c("-path", "./run/*/_lib", "-o", "-path", "./run/*/_pylib", "-o", "-path", "./run/*/_pylib2")
+    any_file <- processx::run("find", c(".", "(", excl, ")", "-prune", "-o", "-type", "f", "-print", "-quit"),
+                              wd = stage, error_on_status = FALSE)$stdout
+    # (a size estimate: du leaves out any folder with these names)
+    du <- processx::run("du", c("-s", "-b", "--exclude=_lib", "--exclude=_pylib", "--exclude=_pylib2", "."),
+                        wd = stage, error_on_status = FALSE)$stdout
+    bytes <- suppressWarnings(as.numeric(sub("\\s.*", "", du)))
+    if (is.na(bytes)) bytes <- 0
+    if (!nzchar(trimws(any_file))) {
+      list(status = "none")
+    } else if (bytes > 3 * MAX_KEEP_FILES_MB * 1024^2) {
+      list(status = "too large")
+    } else {
+      # exit status 18: some files could not be read (left out)
+      z <- processx::run("zip", c("-r", "-q", "-y", out, ".",
+                                  "-x", "run/*/_lib/*", "run/*/_pylib/*", "run/*/_pylib2/*"),
+                         wd = stage, error_on_status = FALSE, timeout = KEEP_FILES_ZIP_SECONDS)
+      if (!z$status %in% c(0, 18) || !file.exists(out)) {
+        unlink(out)
+        list(status = "failed", error = trimws(paste(z$stderr, z$stdout)))
+      } else if (file.size(out) > MAX_KEEP_FILES_MB * 1024^2) {
+        unlink(out)
+        list(status = "too large")
+      } else {
+        list(status = "kept", size = file.size(out), unreadable_left_out = z$status == 18)
+      }
+    }
+  }, error = function(e) {
+    unlink(out)
+    list(status = "failed", error = conditionMessage(e))
+  })
+  .set_status(job_dir, files = info)
+  invisible(info)
 }
 
 # A PsyArXiv preprint (field `psyarxiv`, an id checked by api.R): its record
@@ -633,7 +708,7 @@ do_job <- function(job_dir, keys = list()) {
     modules <- unlist(job$modules)
     full <- list()
     if (isTRUE(job$run_code)) {
-      full <- .run_paper_code(paper, modules, job_dir)
+      full <- .run_paper_code(paper, modules, job_dir, keep_files = isTRUE(job$keep_files))
       modules <- character(0)          # all ran in the chain above
     }
     if (length(modules)) {

@@ -686,12 +686,22 @@ folder. It follows the same switch as the app: open to anyone while
 | `POST /api/jobs` | PDF or bibr JSON; `kind` = `report` (default), `check` or `convert`; optional `modules`, `report=true`. Or a .zip with `kind` = `repocheck` | at once (HTTP 202): the job's `id`, `status_url` and `result_url` |
 | `GET /api/jobs/<id>` | | `status` (`queued`, `running`, `done`, `failed`), `step` (such as "running module 3 of 7: stat_check"), `position` in the queue, for a folder check `progress` (0 to 1), `error`; fields without a value are left out |
 | `GET /api/jobs/<id>/result` | | the result once `done`; HTTP 409 before that, 422 with `error` if the job failed |
+| `GET /api/jobs/<id>/files` | | for a job with `keep_files=true`: the .zip of the kept files (see below); HTTP 404 when there is none |
 | `POST /api/report` | PDF or bibr JSON; optional `modules` | the HTML report (self-contained) |
 | `POST /api/check` | PDF or bibr JSON; optional `modules`, `report=true` | module results as JSON (and `report_html`) |
 | `POST /api/convert` | PDF | bibr's JSON |
 | `POST /api/repocheck` | .zip of a data and code folder, or instead a field `url` with a link to an online repository; optional `modules` = an installed module, `human_participants` = `true`/`false` | the HTML report of `repo_check`, `code_check` and `data_check`, or of the installed module |
 | `GET /api/modules` | | the modules that may be requested, the default set, and (`installed`) the modules installed on this server |
 | `GET /api/health` | | status, whether bibr answers, metacheck version |
+
+`keep_files=true` (13 November 2026; `report` and `check` with `run_code=true`):
+the job also keeps the files its checks downloaded from the paper's repositories
+(`downloaded/<repository>/...`) and each folder the code ran in, with the files
+the code made (`run/<n>/...`, without the packages installed for the run), as one
+.zip, at `GET /api/jobs/<id>/files` and deleted with the result. Its status then has
+`files`: `kept` (with `size`), `none`, `too large` (over 1 GB) or `failed`, and
+`files_url` when kept. Links the code made are stored as links, not followed.
+The PsyArXiv and medRxiv report sites use it to store these files on pCloud.
 
 Two fields work with several of these (22 October 2026):
 

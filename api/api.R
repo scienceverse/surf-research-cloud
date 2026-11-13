@@ -599,7 +599,11 @@ later::later(.scheduler, 1)
                             source = if (identical(up$fields$source, "website")) "website" else "code",
                             visitor = .visitor_code(req),
                             report = .parse_flag(up$fields$report),
-                            paper = .parse_flag(up$fields$paper)),
+                            paper = .parse_flag(up$fields$paper),
+                            # with run_code: keep what the modules downloaded and the
+                            # folders the code ran in, as files.zip (worker.R,
+                            # .zip_job_files()), served by GET /jobs/<id>/files
+                            keep_files = .parse_flag(up$fields$keep_files)),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
   keys <- .parse_keys(up$fields)
   if (length(keys)) assign(id, keys, envir = job_keys)
@@ -641,8 +645,11 @@ later::later(.scheduler, 1)
     converter = st$converter,
     created = st$created, started = st$started, finished = st$finished,
     error = st$error,
+    # a job with keep_files: "kept" (with its size), "none", "too large" or "failed"
+    files = st$files,
     status_url = paste0(base, "/jobs/", id),
-    result_url = paste0(base, "/jobs/", id, "/result")
+    result_url = paste0(base, "/jobs/", id, "/result"),
+    files_url = if (identical(st$files$status, "kept")) paste0(base, "/jobs/", id, "/files")
   ))
 }
 
@@ -807,6 +814,7 @@ function() {
 #* @param paper "true" to include the paper as converted (bibr JSON: its full text, sections, references, tables, ...) in a check result, as `paper` (optional, default false)
 #* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...) instead of the full (paper) or brief (repository) report
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
+#* @param keep_files report and check with run_code: "true" to keep the files the checks downloaded from the paper's repositories and the folders the code ran in (with the files it made), as a .zip at GET /jobs/<id>/files (at most 1 GB; kept one hour, like the result)
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @param key_github your own GitHub key (optional), used for this job only instead of the server's key; see key_problems in GET /health
 #* @param key_osf your own OSF key (optional), used for this job only instead of the server's key; see key_problems in GET /health
@@ -840,6 +848,23 @@ function(id, res) {
     return(res)
   }
   .result_response(id, res)
+}
+
+#* The files a finished job with keep_files kept (a .zip): what its modules downloaded from the paper's repositories (downloaded/) and the folders its code ran in, with the files the code made (run/)
+#* @get /jobs/<id>/files
+function(id, res) {
+  res$setHeader("Content-Type", "application/json")
+  f <- if (.valid_id(id)) file.path(.job_dir(id), "files.zip") else ""
+  if (!.valid_id(id) || !identical(.read_status(id)$status, "done") || !file.exists(f)) {
+    res$status <- 404
+    res$body <- jsonlite::toJSON(list(error = "This job has no kept files (or it is not finished, or older than one hour)."),
+                                 auto_unbox = TRUE)
+    return(res)
+  }
+  res$status <- 200
+  res$setHeader("Content-Type", "application/zip")
+  res$body <- readBin(f, "raw", file.size(f))
+  res
 }
 
 #* Make a metacheck report (HTML) from a PDF or bibr JSON, in one call
