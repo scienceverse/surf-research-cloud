@@ -703,6 +703,24 @@ the code made (`run/<n>/...`, without the packages installed for the run), as on
 `files_url` when kept. Links the code made are stored as links, not followed.
 The PsyArXiv and medRxiv report sites use it to store these files on pCloud.
 
+A second file in the form field `downloaded` (17 November 2026; `report` and
+`check`): the `files.zip` of an earlier check with `keep_files`. Before the
+checks run, the files in its `downloaded/` folder are put in metacheck's folder of
+downloads for the job, which has the same layout, so metacheck uses them instead of
+fetching them from the repositories again; files that are not in it are fetched as
+usual, and the `run/` folders are left out. With it, a paper is checked again with
+a newer metacheck on the same files, without asking the OSF or GitHub for them
+(the report sites send it with the paper's stored bibr JSON when they check their
+papers again). The whole request stays within 500 MB. It never stops a job: the
+result's `downloaded` says `used` (with the number of `files`), `empty`, or
+`failed` (with the `error`), and after `failed` the files are fetched as without it.
+
+The JSON result of a `check` also keeps, besides each module's table and texts,
+`repo_check`'s `ownership` (whose deposit each linked repository is: this paper's,
+the authors' earlier work, or other people's) and `table_not_checked` (the files of
+the deposits that are not this paper's, which the checks leave out), `code_check`'s
+`version_pin` and `reproducibility_check`'s `per_paper` (17 November 2026).
+
 Two fields work with several of these (22 October 2026):
 
 - `report_type=checklist`: metacheck's checklist report (every check sorted by its

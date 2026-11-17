@@ -474,6 +474,52 @@ do_repocheck <- function(job_dir, job) {
   metacheck::report_module_run(paper, modules, args)
 }
 
+# The files.zip of an earlier check (api.R: the upload field `downloaded`,
+# saved as input.downloaded.zip): the files in its downloaded/ folder go into
+# metacheck's session folder of downloads, which has the same layout
+# (<repository>/<path in the repository>). metacheck uses a file it finds
+# there instead of fetching it again (repo_download_files(): `already`), and
+# fetches the files that are not there as usual. The run/ folders are left
+# out. Unpacked on the sandbox file system (R's temporary folder, like the
+# session folder), only names inside downloaded/, with the repository check's
+# limits on the number of files and on safe paths, and at most
+# 3 * MAX_KEEP_FILES_MB unpacked (what a files.zip can hold). Never stops the
+# job: anything wrong, and the files are fetched as without it. Returns what
+# was done, for the result: "used" (with the number of files), "empty" or
+# "failed" (with the reason).
+.use_downloaded <- function(job_dir) {
+  zip <- file.path(job_dir, "input.downloaded.zip")
+  if (!file.exists(zip)) return(NULL)
+  on.exit(unlink(zip), add = TRUE)
+  stage <- file.path(tempdir(), "earlier_downloads")
+  on.exit(unlink(stage, recursive = TRUE), add = TRUE)
+  tryCatch({
+    .set_status(job_dir, step = "unpacking the earlier downloaded files")
+    listing <- utils::unzip(zip, list = TRUE)
+    files <- listing$Name[startsWith(listing$Name, "downloaded/") & !grepl("/$", listing$Name)]
+    if (!length(files)) return(list(status = "empty"))
+    if (length(files) > 20000) stop(sprintf("%d files; at most 20000 are used", length(files)), call. = FALSE)
+    if (any(grepl("(^|[/\\\\])\\.\\.([/\\\\]|$)", files) | grepl("^([/\\\\]|[A-Za-z]:)", files))) {
+      stop("unsafe file paths", call. = FALSE)
+    }
+    mb <- sum(listing$Length[listing$Name %in% files], na.rm = TRUE) / 1024^2
+    if (mb > 3 * MAX_KEEP_FILES_MB) stop(sprintf("%.0f MB unpacked; at most %d MB are used", mb, 3 * MAX_KEEP_FILES_MB), call. = FALSE)
+    utils::unzip(zip, files = files, exdir = stage)
+    session <- getOption("metacheck.repo_cache.session_dir", file.path(tempdir(), "metacheck-repo-files"))
+    dir.create(session, recursive = TRUE, showWarnings = FALSE)
+    options(metacheck.repo_cache.session_dir = session)
+    # one folder per repository; both on the sandbox file system, so moved
+    for (r in list.files(file.path(stage, "downloaded"), full.names = TRUE)) {
+      to <- file.path(session, basename(r))
+      if (!file.exists(to)) file.rename(r, to)
+    }
+    list(status = "used", files = length(files))
+  }, error = function(e) {
+    message("earlier downloaded files not used: ", conditionMessage(e))
+    list(status = "failed", error = conditionMessage(e))
+  })
+}
+
 # files.zip for a check with `keep_files` (.run_paper_code()): what the modules
 # downloaded from the paper's repositories, as downloaded/<repository>/...
 # (metacheck's session folder of downloads, and the lasting cache when a module
@@ -704,7 +750,9 @@ do_job <- function(job_dir, keys = list()) {
       paper$info$title <- "(no title found in the PDF)"  # metacheck #497
     }
 
-    # 3. the modules, one by one, with progress
+    # 3. the modules, one by one, with progress; first the files an earlier
+    # check downloaded, when the job brought them (`downloaded`)
+    downloaded <- .use_downloaded(job_dir)
     modules <- unlist(job$modules)
     full <- list()
     if (isTRUE(job$run_code)) {
@@ -760,8 +808,13 @@ do_job <- function(job_dir, keys = list()) {
       # page can show the checklist report from this JSON; and data_check's
       # findings (one row per problem with a file, a column or a sheet) and
       # careless (the respondents flagged for careless responding), which its
-      # report shows only as a table in the text. Those fields only when a
-      # module gives them
+      # report shows only as a table in the text; repo_check's ownership (whose
+      # deposit each linked repository is: the paper's own, the authors'
+      # earlier work, or other people's) and table_not_checked (the files of
+      # the deposits that are not the paper's own, left out of the checks);
+      # code_check's version_pin (whether the code records its package
+      # versions) and reproducibility_check's per_paper (its counts per
+      # paper). Those fields only when a module gives them
       results <- lapply(full, function(r) json_safe(c(
         list(module = r$module, title = r$title, traffic_light = r$traffic_light,
              summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
@@ -769,7 +822,9 @@ do_job <- function(job_dir, keys = list()) {
         Filter(Negate(is.null), list(
           checks = r$checks, checklist_section = r$checklist_section, intro = r$intro,
           naming_issues = r$naming_issues, useless_files = r$useless_files,
-          findings = r$findings, careless = r$careless)))))
+          findings = r$findings, careless = r$careless,
+          ownership = r$ownership, table_not_checked = r$table_not_checked,
+          version_pin = r$version_pin, per_paper = r$per_paper)))))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
         # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
@@ -781,6 +836,8 @@ do_job <- function(job_dir, keys = list()) {
         modules = results,
         report_html = html
       )
+      # what became of the earlier downloaded files the job brought, if any
+      if (!is.null(downloaded)) out$downloaded <- downloaded
       if (!is.null(paper_json)) out$paper <- structure(paper_json, class = "json")
       writeLines(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null", na = "null", digits = NA,
                                   json_verbatim = TRUE),

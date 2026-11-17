@@ -383,18 +383,32 @@ later::later(.scheduler, 1)
     stop("Send the file as multipart/form-data, in the form field 'file'.", call. = FALSE)
   }
   parts <- webutils::parse_http(body, ctype)
-  fields <- lapply(parts[setdiff(names(parts), "file")], function(p) {
+  fields <- lapply(parts[setdiff(names(parts), c("file", "downloaded"))], function(p) {
     if (is.raw(p$value)) rawToChar(p$value) else as.character(p$value)
   })
+  # `downloaded` (optional): the files.zip an earlier check with keep_files
+  # returned; the files in its downloaded/ folder are used instead of being
+  # fetched from the repositories again (worker.R, .use_downloaded()). It
+  # counts toward the request's limit of 500 MB.
+  d <- parts[["downloaded"]]
+  downloaded <- NULL
+  if (!is.null(d) && length(d$value)) {
+    d4 <- if (length(d$value) >= 4) d$value[1:4] else d$value
+    if (!identical(d4, as.raw(c(0x50, 0x4b, 0x03, 0x04))) &&
+        !identical(d4, as.raw(c(0x50, 0x4b, 0x05, 0x06)))) {
+      stop("The field 'downloaded' must be a .zip file: the files.zip of an earlier check with keep_files.", call. = FALSE)
+    }
+    downloaded <- d$value
+  }
   f <- parts[["file"]]
   if (is.null(f) || is.null(f$value) || length(f$value) == 0) {
     # no file: a repository check of a link to an online repository
     if (nzchar(trimws(fields$url %||% ""))) {
-      return(list(raw = NULL, kind = "url", name = "", fields = fields))
+      return(list(raw = NULL, kind = "url", name = "", fields = fields, downloaded = downloaded))
     }
     # or a PsyArXiv preprint, whose PDF the worker fetches itself
     if (nzchar(trimws(fields$psyarxiv %||% ""))) {
-      return(list(raw = NULL, kind = "psyarxiv", name = "", fields = fields))
+      return(list(raw = NULL, kind = "psyarxiv", name = "", fields = fields, downloaded = downloaded))
     }
     stop("Send exactly one file in the form field 'file' (or, for a repository check, a link in the field 'url'; for a PsyArXiv preprint, its link or id in the field 'psyarxiv').",
          call. = FALSE)
@@ -417,7 +431,7 @@ later::later(.scheduler, 1)
   # the uploaded file's name without folders and extension (the report's title)
   name <- tools::file_path_sans_ext(basename(gsub("\\\\", "/", f$filename %||% "")))
   name <- substr(gsub("[[:cntrl:]]", "", name), 1, 120)
-  list(raw = raw, kind = kind, name = name, fields = fields)
+  list(raw = raw, kind = kind, name = name, fields = fields, downloaded = downloaded)
 }
 
 # Free space (MB) where the jobs are kept; NA if df gives no answer.
@@ -553,6 +567,9 @@ later::later(.scheduler, 1)
   if (up$kind == "psyarxiv" && !kind %in% c("report", "check")) {
     stop("A PsyArXiv preprint is checked as a paper (kind=report or kind=check).", call. = FALSE)
   }
+  if (!is.null(up$downloaded) && !kind %in% c("report", "check")) {
+    stop("Earlier downloaded files (field 'downloaded') are used only by a report or check of a paper.", call. = FALSE)
+  }
   psyarxiv <- if (up$kind == "psyarxiv") .psyarxiv_id(up$fields$psyarxiv) else NULL
   # without bibr, a GROBID server (METACHECK_GROBID_URL) converts the PDF
   if (up$kind %in% c("pdf", "docx", "psyarxiv") && !nzchar(Sys.getenv("BIBR_API_URL")) &&
@@ -575,6 +592,7 @@ later::later(.scheduler, 1)
   if (!is.null(url)) writeLines(url, file.path(.job_dir(id), input))
   else if (!is.null(psyarxiv)) writeLines(psyarxiv, file.path(.job_dir(id), input))
   else writeBin(up$raw, file.path(.job_dir(id), input))
+  if (!is.null(up$downloaded)) writeBin(up$downloaded, file.path(.job_dir(id), "input.downloaded.zip"))
   jsonlite::write_json(list(kind = kind, modules = modules, input_kind = up$kind, input_file = input,
                             name = if (!is.null(url)) url else if (!is.null(psyarxiv)) psyarxiv else up$name,
                             url = url,
@@ -603,7 +621,10 @@ later::later(.scheduler, 1)
                             # with run_code: keep what the modules downloaded and the
                             # folders the code ran in, as files.zip (worker.R,
                             # .zip_job_files()), served by GET /jobs/<id>/files
-                            keep_files = .parse_flag(up$fields$keep_files)),
+                            keep_files = .parse_flag(up$fields$keep_files),
+                            # files.zip of an earlier check, saved as input.downloaded.zip (removed
+                            # with the other input files when the job ends or fails)
+                            downloaded = !is.null(up$downloaded)),
                        file.path(.job_dir(id), "job.json"), auto_unbox = TRUE)
   keys <- .parse_keys(up$fields)
   if (length(keys)) assign(id, keys, envir = job_keys)
@@ -815,6 +836,7 @@ function() {
 #* @param report_type "checklist" for the checklist report (every check sorted by its result: to fix, to improve, ...) instead of the full (paper) or brief (repository) report
 #* @param crossref "true" to let bibr complete the references through Crossref, which sends the paper's reference list to Crossref (optional, default false)
 #* @param keep_files report and check with run_code: "true" to keep the files the checks downloaded from the paper's repositories and the folders the code ran in (with the files it made), as a .zip at GET /jobs/<id>/files (at most 1 GB; kept one hour, like the result)
+#* @param downloaded:file report and check: the files.zip of an earlier check with keep_files (optional); the files in its downloaded/ folder are used instead of fetching them from the repositories again, and files not in it are fetched as usual. The whole request is at most 500 MB
 #* @param run_code repocheck: "false" to skip running the repository's R and Python code in the sandbox (default true where the server offers it; see GET /health); with an installed module, "true" to have the module run the code in the sandbox (default false). report and check: "true" to also fetch the repository the paper links to, run its code in the sandbox and compare the results with the paper (default false)
 #* @param key_github your own GitHub key (optional), used for this job only instead of the server's key; see key_problems in GET /health
 #* @param key_osf your own OSF key (optional), used for this job only instead of the server's key; see key_problems in GET /health
