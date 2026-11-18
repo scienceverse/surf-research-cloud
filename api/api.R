@@ -110,6 +110,7 @@ DEFAULT_MODULES <- c(
 # service restarts runs with the server's keys.
 KEY_SERVICES <- c("github", "osf", "dryad", "researchbox", "gitlab", "openalex")
 job_keys <- new.env()
+started_keys <- new.env()      # keys of running jobs, for .restart_job()
 # metacheck's messages call the server's keys "provided by metacheck", except
 # on someone's own computer
 options(metacheck.keys.shared = !METACHECK_LOCAL)
@@ -222,7 +223,12 @@ running <- new.env()          # job id -> callr process
   .write_status(id, st)
   job <- .read_job(id)
   keys <- if (exists(id, envir = job_keys, inherits = FALSE)) get(id, envir = job_keys) else list()
-  if (length(keys)) rm(list = id, envir = job_keys)
+  if (length(keys)) {
+    rm(list = id, envir = job_keys)
+    # kept until the job ends, for a restart after the server ran out of
+    # memory (.restart_job())
+    assign(id, keys, envir = started_keys)
+  }
   env <- callr::rcmd_safe_env()
   if (isTRUE(job$run_code)) {
     # The job's own folder on the sandbox file system holds everything the
@@ -252,14 +258,60 @@ running <- new.env()          # job id -> callr process
 
 # Stops a job's sandbox containers and deletes its sandbox folder (as root,
 # through the guard, since the code's files belong to the sandbox's user).
-.sandbox_cleanup <- function(id) {
+.sandbox_cleanup <- function(id, wait = FALSE) {
   if (SANDBOX_PROCESS) {
     # no containers and no other user: this process deletes the folder itself
     unlink(file.path(SANDBOX_ROOT, id), recursive = TRUE)
   } else if (dir.exists(file.path(SANDBOX_ROOT, id))) {
     system2("sudo", c("-n", "/usr/local/sbin/metacheck-sandbox", "cleanup", id),
-            stdout = FALSE, stderr = FALSE, wait = FALSE)
+            stdout = FALSE, stderr = FALSE, wait = wait)
   }
+}
+
+# A job whose R process was stopped without a crash (in practice: the server
+# ran out of memory and Linux stopped the process using the most) is started
+# again once, after the model on this server is told to unload, which gives
+# its memory back. Not when R crashed (that would happen again), not a second
+# time, and not when the input is gone (a folder check deletes its .zip once
+# unpacked). The job keeps its place at the front of the queue (its `seq`),
+# the sender's own keys, and says so in its step (`restarted`, the website
+# shows the step). Returns TRUE when the job was put back in the queue.
+.restart_job <- function(id, st) {
+  dir <- .job_dir(id)
+  job <- .read_job(id)
+  log <- tryCatch(readLines(file.path(dir, "worker.log"), warn = FALSE), error = function(e) character(0))
+  crashed <- any(grepl("caught segfault|caught illegal operation|caught bus error", log))
+  has_input <- isTRUE(job$input_kind %in% c("url", "psyarxiv")) ||
+    (nzchar(job$input_file %||% "") && file.exists(file.path(dir, job$input_file)))
+  if (isTRUE(st$restarted) || crashed || !has_input) return(FALSE)
+  .unload_model()
+  # the first run's sandbox folder is deleted before the new run makes its own
+  .sandbox_cleanup(id, wait = TRUE)
+  unlink(file.path(dir, c("progress.txt", "worker.log")))
+  if (exists(id, envir = started_keys, inherits = FALSE)) {
+    assign(id, get(id, envir = started_keys), envir = job_keys)
+    rm(list = id, envir = started_keys)
+  }
+  st$status <- "queued"
+  st$step <- "started again: the server ran out of memory"
+  st$restarted <- TRUE
+  st$started <- NULL
+  .write_status(id, st)
+  TRUE
+}
+
+# Tells the model on this server (Ollama, OLLAMA_BASE_URL) to unload now; it
+# loads again at its next question. Nothing happens without a local model.
+.unload_model <- function() {
+  url <- Sys.getenv("OLLAMA_BASE_URL"); model <- Sys.getenv("METACHECK_LLM_MODEL")
+  if (!nzchar(url) || !nzchar(model)) return(invisible(FALSE))
+  tryCatch({
+    h <- curl::new_handle(timeout = 20, customrequest = "POST",
+                          postfields = jsonlite::toJSON(list(model = model, keep_alive = 0), auto_unbox = TRUE))
+    curl::handle_setheaders(h, "Content-Type" = "application/json")
+    curl::curl_fetch_memory(paste0(sub("/+$", "", url), "/api/generate"), handle = h)
+    invisible(TRUE)
+  }, error = function(e) invisible(FALSE))
 }
 
 # The error for a worker that ended without writing done or failed: the R
@@ -302,11 +354,13 @@ running <- new.env()          # job id -> callr process
       if (!p$is_alive()) {
         rm(list = id, envir = running)
         st <- .read_status(id)
+        if (!(st$status %in% c("done", "failed")) && .restart_job(id, st)) next
         if (!(st$status %in% c("done", "failed"))) {
           st$error <- .stopped_message(id, st)
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
           .write_status(id, st)
         }
+        if (exists(id, envir = started_keys, inherits = FALSE)) rm(list = id, envir = started_keys)
         .usage_record(id, st$status)
         .sandbox_cleanup(id)
         unlink(file.path(.job_dir(id), "worker.log"))
@@ -317,6 +371,7 @@ running <- new.env()          # job id -> callr process
           p$kill()
           .sandbox_cleanup(id)
           rm(list = id, envir = running)
+          if (exists(id, envir = started_keys, inherits = FALSE)) rm(list = id, envir = started_keys)
           unlink(list.files(.job_dir(id), pattern = "^input\\.", full.names = TRUE))
           st <- .read_status(id)
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
@@ -647,6 +702,11 @@ later::later(.scheduler, 1)
       if (nzchar(detail)) st$step <- detail
     }
   }
+  # a job started again after the server ran out of memory (.restart_job())
+  # says so during its second run too
+  if (isTRUE(st$restarted) && identical(st$status, "running")) {
+    st$step <- paste0("started again after the server ran out of memory; ", st$step %||% "working")
+  }
   # Full links as the client sees them (nginx passes the scheme and the /api
   # prefix); without nginx, links relative to this service.
   host <- req$HTTP_HOST %||% ""
@@ -658,6 +718,8 @@ later::later(.scheduler, 1)
     id = id,
     status = st$status,
     step = st$step,
+    # started again after the server ran out of memory (.restart_job())
+    restarted = if (isTRUE(st$restarted)) TRUE else NULL,
     position = if (identical(st$status, "queued")) .position(id) else NULL,
     progress = progress,
     run_code = if (isTRUE(.read_job(id)$run_code)) TRUE else NULL,

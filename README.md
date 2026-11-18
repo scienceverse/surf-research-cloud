@@ -1002,6 +1002,7 @@ public access on the server.
 | `metacheck_llm` | `ollama` | `ollama` = local model for the power check when the workspace has a GPU, otherwise the bibr workspace's; `bibr` = always the bibr workspace's; `ollama-cpu` = a local model on the processors, without a GPU (see "A workspace without bibr"); `url` = another server's (see "A model on another server"); `none` = no model |
 | `metacheck_llm_model` | `qwen3.5:4b` | Ollama model tag; on a workspace of its own, a larger model fits; with `url`, the name the other server gives the model |
 | `metacheck_ollama_context` | `16384` | Ollama's context window in tokens |
+| `metacheck_ollama_keep_alive` | `auto` | how long Ollama keeps the model loaded after its last use (`30m`, `2h`, `-1` = always); `auto` = 30 minutes for a model on the processors (`ollama-cpu`), which then gives its memory back to the jobs, and always on a GPU. Loading it again took 6 to 70 s on a 4-core workspace |
 | `metacheck_llm_url` | `none` | with `metacheck_llm = url`: the other server's OpenAI-compatible address, with or without `/v1` |
 | `metacheck_llm_api_key` | `none` | with `url`: that server's key (sent as `Authorization: Bearer`); `none` = no key |
 | `metacheck_llm_name` | `none` | with `url`: the name the app shows for that server; `none` = its host name |
