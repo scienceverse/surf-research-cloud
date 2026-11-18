@@ -720,6 +720,15 @@ The JSON result of a `check` also keeps, besides each module's table and texts,
 the authors' earlier work, or other people's) and `table_not_checked` (the files of
 the deposits that are not this paper's, which the checks leave out), `code_check`'s
 `version_pin` and `reproducibility_check`'s `per_paper` (17 November 2026).
+For a later TRACE Research Object (TRO) declaration of a code run (metacheck #404),
+it also keeps `reproducibility_check`'s `run_results` without the console output
+(each script's outcome, `elapsed`, `started_at`, `ended_at` and `exit_status`),
+`modifications` (each change metacheck made to a script, with the script's
+`sha256_before` and `sha256_after`), `artifacts` (every file's SHA-256 hash, size and
+type as downloaded, just before the first script ran, and the files the scripts made,
+changed or removed) and `environment` (metacheck's version, the sandbox, the Docker
+images with their IDs and digests, the `docker run` arguments, the time limits and
+whether the network was off) (18 November 2026; needs a metacheck that has them).
 
 Two fields work with several of these (22 October 2026):
 
