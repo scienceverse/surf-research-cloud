@@ -70,6 +70,12 @@
       metacheck_llm: "ollama"
       metacheck_llm_model: "qwen3.5:4b"
       metacheck_ollama_context: "16384"
+      # How long Ollama keeps the model loaded after its last use (Ollama's
+      # OLLAMA_KEEP_ALIVE: "30m", "2h", "-1" = always). "auto" = 30 minutes for
+      # a model on the processors (ollama-cpu), which then gives its memory
+      # (4 to 13 GB) back to the jobs between uses, and always on a GPU. Loading
+      # it again took 6 to 70 s on the 4-core workspace (18 November 2026).
+      metacheck_ollama_keep_alive: "auto"
       # With metacheck_llm = url: the server's address (with or without /v1),
       # its key ("none" = no key), and the name the app shows for it ("none" =
       # the address's host name). The app, the web interface and the installed
@@ -523,6 +529,7 @@
         ollama_model: "{{ metacheck_llm_model }}"
         ollama_context_length: "{{ metacheck_ollama_context }}"
         ollama_on_cpu: "{{ metacheck_cpu_llm | bool }}"
+        ollama_keep_alive: "{{ (('30m' if metacheck_cpu_llm | bool else '-1') if metacheck_ollama_keep_alive == 'auto' else metacheck_ollama_keep_alive) }}"
       when: metacheck_local_llm | bool
 
     # ------------------------------------------------------------------

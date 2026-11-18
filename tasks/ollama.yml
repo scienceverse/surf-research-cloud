@@ -3,7 +3,8 @@
 # metacheck components; on a workspace with both, they configure the same
 # Ollama (run bibr first, see README).
 #
-# Expects: ollama_model, ollama_context_length, large_disk (from large_disk.yml).
+# Expects: ollama_model, ollama_context_length, large_disk (from large_disk.yml);
+# optional: ollama_on_cpu, ollama_keep_alive (default -1: always loaded).
 # Sets:    ollama_url (address for programs on this workspace).
 #
 # Ollama has no login, so it never listens on the network: on a workspace
@@ -76,13 +77,19 @@
       [Service]
       Environment=OLLAMA_HOST={{ ollama_host }}:11434
       Environment=OLLAMA_MODELS={{ ollama_models_dir }}
-      # keep the model in (GPU) memory between papers
-      Environment=OLLAMA_KEEP_ALIVE=-1
+      # how long the model stays loaded after its last use (-1: always,
+      # the default; metacheck's metacheck_ollama_keep_alive)
+      Environment=OLLAMA_KEEP_ALIVE={{ ollama_keep_alive | default('-1') }}
       {% if ollama_on_cpu | default(false) | bool %}
       # No GPU: the model runs on the processors, with half the weight of
       # other programs, so the website and code runs are not slowed down much
       # while it answers.
       CPUWeight=50
+      # When the workspace runs out of memory, Linux stops the model (it
+      # loads again at its next question) instead of a job's R process,
+      # which would fail the check (17 and 18 November 2026: two jobs
+      # stopped that way).
+      OOMScoreAdjust=1000
       {% endif %}
       Environment=OLLAMA_MAX_LOADED_MODELS=2
       # Ollama's default window of 4,096 tokens cut off bibr's title step

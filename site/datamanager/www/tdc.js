@@ -177,7 +177,8 @@ async function runJob(file, filename, fields, ui) {
       continue;
     }
     if (st.status === "queued") {
-      ui.progress(null, "Waiting in the queue" + (st.position ? " (position " + st.position + ")" : "") + "…");
+      ui.progress(null, (st.restarted ? "The server ran out of memory, so the check starts again. " : "") +
+        "Waiting in the queue" + (st.position ? " (position " + st.position + ")" : "") + "…");
     } else if (st.status === "running") {
       const step = st.step ? st.step.charAt(0).toUpperCase() + st.step.slice(1) : "Checking";
       ui.progress(st.progress !== undefined ? st.progress : null, step + "… (this takes a few minutes)");
