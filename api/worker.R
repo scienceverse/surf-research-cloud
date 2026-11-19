@@ -694,6 +694,19 @@ KEEP_FILES_ZIP_SECONDS <- 240
   list(path = dest, ext = ext, title = rec$title %||% "", version = rec$version %||% NA)
 }
 
+# reproducibility_check's run_results as the JSON result keeps them: one row
+# per run script with its outcome and how long it ran, when it started and
+# ended and its exit status (for a TRO; metacheck's R/provenance.R). Left out:
+# the console output (stdout, stderr), the script's text (script_lines) and the
+# R objects of its results (captures), which can be large and are not JSON.
+# NULL without run_results.
+run_results_kept <- function(rr) {
+  if (!is.data.frame(rr) || !nrow(rr)) return(NULL)
+  keep <- intersect(c("file_name", "outcome", "error_type", "checked", "reason", "elapsed",
+                      "started_at", "ended_at", "exit_status"), names(rr))
+  rr[, keep, drop = FALSE]
+}
+
 # metacheck's checklist report (report_type = "checklist") from module results
 # that already ran: as metacheck::report() renders it (rmarkdown, with the
 # pandoc Quarto ships), without running the modules a second time. Returns the
@@ -874,7 +887,13 @@ do_job <- function(job_dir, keys = list()) {
       # the deposits that are not the paper's own, left out of the checks);
       # code_check's version_pin (whether the code records its package
       # versions) and reproducibility_check's per_paper (its counts per
-      # paper). Those fields only when a module gives them
+      # paper); and what a TRO declaration of the run needs (metacheck #404,
+      # metacheck's R/provenance.R): reproducibility_check's run_results
+      # without the console output and R objects (run_results_kept()), its
+      # modifications (with each changed script's hash before and after),
+      # artifacts (every file's hash at download, before and after the run)
+      # and environment (the system that ran the code). Those fields only
+      # when a module gives them
       results <- lapply(full, function(r) json_safe(c(
         list(module = r$module, title = r$title, traffic_light = r$traffic_light,
              summary_text = r$summary_text, table = r$table, summary_table = r$summary_table,
@@ -884,7 +903,9 @@ do_job <- function(job_dir, keys = list()) {
           naming_issues = r$naming_issues, useless_files = r$useless_files,
           findings = r$findings, careless = r$careless,
           ownership = r$ownership, table_not_checked = r$table_not_checked,
-          version_pin = r$version_pin, per_paper = r$per_paper)))))
+          version_pin = r$version_pin, per_paper = r$per_paper,
+          run_results = run_results_kept(r$run_results), modifications = r$modifications,
+          artifacts = r$artifacts, environment = r$environment)))))
       out <- list(
         metacheck_version = as.character(utils::packageVersion("metacheck")),
         # "bibr" or "grobid" for a PDF; null for an uploaded bibr JSON
