@@ -27,6 +27,59 @@ source("llm_first.R")
 
 .now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
 
+# This interface's folder (worker.R is sourced from it), for the child process
+# that builds the report (.render_in_time())
+WORKER_DIR <- getwd()
+
+# The longest the report may take to build, and the margin kept before the
+# job's own limit (api.R stops the job at METACHECK_JOB_TOTAL_MINUTES after
+# its start). Building the report (pandoc turning metacheck's report source
+# into HTML) once took over an hour, for a deposit with 1,190 data files whose
+# report had 2,398 tables (81 MB of markdown, 18 November 2026): the job was
+# stopped and returned nothing, also not the results of its checks. 23 of 29
+# PsyArXiv preprints that failed by 12 November had failed in this step.
+REPORT_MAX_MINUTES <- 15
+REPORT_MARGIN_MINUTES <- 2
+
+# Seconds the report may take: REPORT_MAX_MINUTES, or less when the job's own
+# limit comes sooner (minus REPORT_MARGIN_MINUTES).
+.report_seconds <- function(job_dir) {
+  total <- suppressWarnings(as.numeric(Sys.getenv("METACHECK_JOB_TOTAL_MINUTES")))
+  most <- REPORT_MAX_MINUTES * 60
+  if (is.na(total)) return(most)
+  started <- tryCatch(jsonlite::read_json(file.path(job_dir, "status.json"))$started,
+                      error = function(e) NULL)
+  start <- if (is.null(started)) NA else as.POSIXct(started, format = "%Y-%m-%dT%H:%M:%S%z")
+  if (is.na(start)) return(most)
+  left <- as.numeric(difftime(start + (total - REPORT_MARGIN_MINUTES) * 60, Sys.time(), units = "secs"))
+  max(0, min(most, left))
+}
+
+# The report's HTML, built in a child process that is stopped, with pandoc
+# and anything else it started, when .report_seconds() are up. Returns
+# list(html, timed_out): html is "" when the report could not be built.
+.render_in_time <- function(full, paper, report_type, job_dir) {
+  secs <- .report_seconds(job_dir)
+  if (secs < 30) return(list(html = "", timed_out = TRUE))
+  p <- callr::r_bg(function(dir, full, paper, report_type) {
+    setwd(dir)
+    source("worker.R")
+    if (identical(report_type, "checklist")) render_checklist_html(full, paper)
+    else render_report_html(full, paper)
+  }, args = list(dir = WORKER_DIR, full = full, paper = paper, report_type = report_type),
+  supervise = TRUE)
+  p$wait(timeout = secs * 1000)
+  if (p$is_alive()) {
+    p$kill_tree()
+    return(list(html = "", timed_out = TRUE))
+  }
+  html <- tryCatch(p$get_result(), error = function(e) {
+    message("report not rendered: ", conditionMessage(e))
+    ""
+  })
+  list(html = if (is.character(html) && length(html) == 1) html else "", timed_out = FALSE)
+}
+
 # Atomic status update: other processes (api.R) read status.json at any time.
 .set_status <- function(job_dir, ...) {
   path <- file.path(job_dir, "status.json")
@@ -804,12 +857,19 @@ do_job <- function(job_dir, keys = list()) {
     # 4. the result
     want_report <- job$kind == "report" || isTRUE(job$report)
     html <- ""
+    report_timed_out <- FALSE
     if (want_report) {
       .set_status(job_dir, step = "rendering the report")
-      html <- if (identical(job$report_type, "checklist")) render_checklist_html(full, paper)
-              else render_report_html(full, paper)
-      if (job$kind == "report" && !nzchar(html)) stop("The report could not be rendered.")
-      html <- .add_converter_note(html, converter)
+      built <- .render_in_time(full, paper, job$report_type, job_dir)
+      html <- built$html
+      report_timed_out <- built$timed_out
+      if (job$kind == "report" && !nzchar(html)) {
+        stop(if (report_timed_out) {
+          paste0("The checks finished, but the report was too large to build within ",
+                 REPORT_MAX_MINUTES, " minutes. Ask for the results as JSON (kind = check) instead.")
+        } else "The report could not be rendered.")
+      }
+      if (nzchar(html)) html <- .add_converter_note(html, converter)
     }
     if (job$kind == "report") {
       writeLines(html, file.path(job_dir, "result.html"), useBytes = TRUE)
@@ -857,6 +917,9 @@ do_job <- function(job_dir, keys = list()) {
         modules = results,
         report_html = html
       )
+      # the report was asked for but could not be built in time
+      # (.render_in_time()); the results of the checks are complete
+      if (report_timed_out) out$report_timed_out <- TRUE
       # what became of the earlier downloaded files the job brought, if any
       if (!is.null(downloaded)) out$downloaded <- downloaded
       if (!is.null(paper_json)) out$paper <- structure(paper_json, class = "json")
