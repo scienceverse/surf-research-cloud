@@ -230,6 +230,9 @@ running <- new.env()          # job id -> callr process
     assign(id, keys, envir = started_keys)
   }
   env <- callr::rcmd_safe_env()
+  # the job's whole limit, so the worker stops building the report in time
+  # (worker.R, .report_seconds())
+  env <- c(env, METACHECK_JOB_TOTAL_MINUTES = as.character(.job_timeout(id)))
   if (isTRUE(job$run_code)) {
     # The job's own folder on the sandbox file system holds everything the
     # code can see and write (R's temporary folder, so metacheck's sandbox
