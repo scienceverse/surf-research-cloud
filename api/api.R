@@ -88,16 +88,19 @@ USAGE_DIR <- Sys.getenv("METACHECK_USAGE_DIR", file.path(JOBS_DIR, "..", "metach
 # ref_accuracy is left out for now: it counted references whose DOI only
 # Crossref found neither as checked nor as without a DOI, and most of its
 # flags are errors in reading the PDF (metacheck NEWS, 0.4.1.5).
+# ethics_check last: it reads the results of power, stat_p_exact, stat_check,
+# repo_check, data_check and prereg_check (metacheck #695, point 18)
 ALLOWED_MODULES <- c(
-  "power", "marginal", "prereg_check", "ethics_check",
+  "power", "marginal", "prereg_check",
   "ref_pubpeer", "ref_retraction", "ref_replication",
   "stat_check", "stat_p_exact", "stat_p_nonsig", "stat_effect_size",
-  "repo_check", "code_check", "data_check", "codebook_check"
+  "repo_check", "code_check", "data_check", "codebook_check",
+  "ethics_check"
 )
 # Default: the modules that need no other online service, so a report is quick.
 DEFAULT_MODULES <- c(
-  "power", "marginal", "ethics_check", "stat_check", "stat_p_exact",
-  "stat_p_nonsig", "stat_effect_size"
+  "power", "marginal", "stat_check", "stat_p_exact",
+  "stat_p_nonsig", "stat_effect_size", "ethics_check"
 )
 
 # ---- visitors' own API keys ---------------------------------------------------
