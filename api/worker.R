@@ -55,29 +55,68 @@ REPORT_MARGIN_MINUTES <- 2
   max(0, min(most, left))
 }
 
+# What the child process printed when the report was not built: the lines
+# that say why (render_report_html() in metacheck's helpers.R and
+# render_checklist_html() catch the error and only print it), else its last
+# lines; at most 2,000 characters, the end kept. Every file path is cut to
+# the file's name (/tmp/RtmpAb12/file3c4.qmd becomes file3c4.qmd), because
+# the message is stored with the result, which the PsyArXiv site publishes,
+# and the server's folders are no one else's business; web addresses are
+# left whole.
+.report_build_error <- function(log, fallback = "") {
+  lines <- tryCatch(readLines(log, warn = FALSE), error = function(e) character(0))
+  lines <- trimws(lines[nzchar(trimws(lines))])
+  why <- grep("render failed|not rendered|not produced|error", lines, ignore.case = TRUE, value = TRUE)
+  msg <- paste(c(fallback[nzchar(fallback)], if (length(why)) why else utils::tail(lines, 10)),
+               collapse = "\n")
+  msg <- gsub("file://", "", msg, fixed = TRUE)
+  msg <- gsub("(?<![\\w:/.~-])~?(?:[A-Za-z]:)?[\\\\/](?:[^\\\\/\\s'\"`]+[\\\\/])+([^\\\\/\\s'\"`]+)",
+              "\\1", msg, perl = TRUE)
+  if (!nzchar(msg)) msg <- "The report was not built, and nothing was printed about why."
+  if (nchar(msg) > 2000) msg <- paste0("…", substr(msg, nchar(msg) - 1999, nchar(msg)))
+  msg
+}
+
 # The report's HTML, built in a child process that is stopped, with pandoc
 # and anything else it started, when .report_seconds() are up. Returns
-# list(html, timed_out): html is "" when the report could not be built.
+# list(html, timed_out, build): html is "" when the report could not be
+# built; build says how long it was allowed and took, in seconds, and, when
+# no report came out before the time was up, why (.report_build_error()). The
+# child's printed output goes to a file, not to a pipe no one reads (callr's
+# default), so a child that prints much is not held up waiting for a reader.
 .render_in_time <- function(full, paper, report_type, job_dir) {
   secs <- .report_seconds(job_dir)
-  if (secs < 30) return(list(html = "", timed_out = TRUE))
+  build <- list(seconds_allowed = round(secs), seconds_taken = 0, timed_out = FALSE)
+  if (secs < 30) {
+    build$timed_out <- TRUE
+    build$error <- "Less than 30 seconds of the job's time were left for the report."
+    return(list(html = "", timed_out = TRUE, build = build))
+  }
+  log <- tempfile("report_build_", fileext = ".log")
+  on.exit(unlink(log), add = TRUE)
+  start <- Sys.time()
   p <- callr::r_bg(function(dir, full, paper, report_type) {
     setwd(dir)
     source("worker.R")
     if (identical(report_type, "checklist")) render_checklist_html(full, paper)
     else render_report_html(full, paper)
   }, args = list(dir = WORKER_DIR, full = full, paper = paper, report_type = report_type),
-  supervise = TRUE)
+  stdout = log, stderr = "2>&1", supervise = TRUE)
   p$wait(timeout = secs * 1000)
-  if (p$is_alive()) {
-    p$kill_tree()
-    return(list(html = "", timed_out = TRUE))
-  }
+  timed_out <- p$is_alive()
+  if (timed_out) p$kill_tree()
+  build$seconds_taken <- round(as.numeric(difftime(Sys.time(), start, units = "secs")))
+  build$timed_out <- timed_out
+  if (timed_out) return(list(html = "", timed_out = TRUE, build = build))
+  failed <- ""
   html <- tryCatch(p$get_result(), error = function(e) {
-    message("report not rendered: ", conditionMessage(e))
+    failed <<- conditionMessage(e)
+    message("report not rendered: ", failed)
     ""
   })
-  list(html = if (is.character(html) && length(html) == 1) html else "", timed_out = FALSE)
+  html <- if (is.character(html) && length(html) == 1 && !is.na(html)) html else ""
+  if (!nzchar(html)) build$error <- .report_build_error(log, failed)
+  list(html = html, timed_out = FALSE, build = build)
 }
 
 # Atomic status update: other processes (api.R) read status.json at any time.
@@ -858,11 +897,13 @@ do_job <- function(job_dir, keys = list()) {
     want_report <- job$kind == "report" || isTRUE(job$report)
     html <- ""
     report_timed_out <- FALSE
+    report_build <- NULL
     if (want_report) {
       .set_status(job_dir, step = "rendering the report")
       built <- .render_in_time(full, paper, job$report_type, job_dir)
       html <- built$html
       report_timed_out <- built$timed_out
+      report_build <- built$build
       if (job$kind == "report" && !nzchar(html)) {
         stop(if (report_timed_out) {
           paste0("The checks finished, but the report was too large to build within ",
@@ -920,6 +961,9 @@ do_job <- function(job_dir, keys = list()) {
       # the report was asked for but could not be built in time
       # (.render_in_time()); the results of the checks are complete
       if (report_timed_out) out$report_timed_out <- TRUE
+      # how long the report was allowed and took, in seconds, and why it
+      # was not built when it was not (.render_in_time())
+      if (!is.null(report_build)) out$report_build <- report_build
       # what became of the earlier downloaded files the job brought, if any
       if (!is.null(downloaded)) out$downloaded <- downloaded
       if (!is.null(paper_json)) out$paper <- structure(paper_json, class = "json")
