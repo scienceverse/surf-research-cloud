@@ -326,22 +326,34 @@ running <- new.env()          # job id -> callr process
 # was doing (its step, or metacheck's last progress message) and whether R
 # crashed (worker.log has R's "caught segfault").
 .stopped_message <- function(id, st) {
-  dir <- .job_dir(id)
-  read1 <- function(f) {
-    p <- file.path(dir, f)
-    if (!file.exists(p)) return(character(0))
-    tryCatch(readLines(p, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
-  }
-  progress <- read1("progress.txt")
-  doing <- if (length(progress) && grepl("\t", progress[[1]])) sub("^[^\t]*\t", "", progress[[1]]) else ""
-  if (!nzchar(doing)) doing <- st$step %||% ""
-  crashed <- any(grepl("caught segfault|caught illegal operation|caught bus error", read1("worker.log")))
+  crashed <- any(grepl("caught segfault|caught illegal operation|caught bus error",
+                       .job_lines(id, "worker.log")))
   paste0(
     "The check stopped unexpectedly",
     if (crashed) ": the R process that runs it crashed. This is a fault in metacheck or a package it uses, not in your files."
     else ": the process that runs it ended (perhaps the server ran out of memory).",
-    if (nzchar(doing) && doing != "starting") paste0(" Its last step was: ", doing, ".") else "",
+    .last_step_text(id, st),
     " Please report it at https://github.com/scienceverse/metacheck/issues, with the files if you can share them.")
+}
+
+# The lines of a file in the job's folder, none when it is missing.
+.job_lines <- function(id, f) {
+  p <- file.path(.job_dir(id), f)
+  if (!file.exists(p)) return(character(0))
+  tryCatch(readLines(p, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+}
+
+# " Its last step was: <step>." for a job that was stopped: metacheck's last
+# progress message, or else the job's step; "" before the job really started.
+# Also in the message of a job stopped for running too long, which named no
+# step, so it could not be told which step took so long; the job's folder,
+# progress.txt with it, is deleted RESULT_KEEP_MINUTES later
+# (psyarxiv_metacheck#9).
+.last_step_text <- function(id, st) {
+  progress <- .job_lines(id, "progress.txt")
+  doing <- if (length(progress) && grepl("\t", progress[[1]])) sub("^[^\t]*\t", "", progress[[1]]) else ""
+  if (!nzchar(doing)) doing <- st$step %||% ""
+  if (nzchar(doing) && doing != "starting") paste0(" Its last step was: ", doing, ".") else ""
 }
 
 .job_timeout <- function(id) {
@@ -380,8 +392,10 @@ running <- new.env()          # job id -> callr process
           if (exists(id, envir = started_keys, inherits = FALSE)) rm(list = id, envir = started_keys)
           unlink(list.files(.job_dir(id), pattern = "^input\\.", full.names = TRUE))
           st <- .read_status(id)
+          # the last step is read before st$step becomes "failed"
+          st$error <- paste0(sprintf("The job took longer than %d minutes and was stopped.", limit),
+                             .last_step_text(id, st))
           st$status <- "failed"; st$step <- "failed"; st$finished <- .now()
-          st$error <- sprintf("The job took longer than %d minutes and was stopped.", limit)
           .write_status(id, st)
           .usage_record(id, "failed")
         }
